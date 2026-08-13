@@ -6,6 +6,8 @@ interface PackageManifest {
   name?: string
   exports?: Record<string, { default?: string } | string>
   files?: string[]
+  peerDependencies?: Record<string, string>
+  peerDependenciesMeta?: Record<string, { optional?: boolean }>
   scripts?: Record<string, string>
   dsh?: {
     bundle?: { patch?: string }
@@ -36,6 +38,8 @@ test('package keeps the installable DSH bundle and Web client contract', async (
   assert.ok(manifest.files?.includes('lib'))
   assert.ok(manifest.files?.includes('cordis.patch.yml'))
   assert.equal(manifest.scripts?.prepare, undefined)
+  assert.equal(manifest.peerDependencies?.react, '^18.2.0')
+  assert.deepEqual(manifest.peerDependenciesMeta?.react, { optional: true })
 
   const patch = await readFile(new URL('cordis.patch.yml', root), 'utf8')
   assert.match(patch, /^\s*- insert:\s*$/m)

@@ -90,6 +90,7 @@ export declare const en: {
     readonly 'run.trigger.manual': "Manual";
     readonly 'run.trigger.catch-up': "Catch-up";
     readonly 'run.openSession': "Session {id}";
+    readonly 'run.markRead': "Mark reviewed";
     readonly loading: "Loading automations…";
     readonly 'error.title': "Automations could not be loaded";
     readonly 'error.retry': "Try again";

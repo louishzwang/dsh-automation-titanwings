@@ -61,17 +61,17 @@ export declare class AutomationService {
      */
     ownsSession(sessionId: string, events?: readonly SessionEventLike[]): boolean;
     dispose(): Promise<void>;
-    snapshot(scope: AutomationScope): Promise<AutomationSnapshot>;
-    create(scope: AutomationScope, request: CreateRequest): Promise<AutomationDefinition>;
+    snapshot(scope: AutomationScope, signal?: AbortSignal): Promise<AutomationSnapshot>;
+    create(scope: AutomationScope, request: CreateRequest, signal?: AbortSignal): Promise<AutomationDefinition>;
     update(scope: AutomationScope, id: string, input: Omit<UpdateAutomationInput, 'now'> & {
         readonly status?: 'active' | 'paused';
-    }): Promise<AutomationDefinition>;
-    delete(scope: AutomationScope, id: string): Promise<{
+    }, signal?: AbortSignal): Promise<AutomationDefinition>;
+    delete(scope: AutomationScope, id: string, signal?: AbortSignal): Promise<{
         readonly id: string;
         readonly deleted: boolean;
     }>;
-    runNow(scope: AutomationScope, id: string): Promise<AutomationRun>;
-    markRead(scope: AutomationScope, runId: string): Promise<AutomationRun>;
+    runNow(scope: AutomationScope, id: string, signal?: AbortSignal): Promise<AutomationRun>;
+    markRead(scope: AutomationScope, runId: string, signal?: AbortSignal): Promise<AutomationRun>;
     private resolveScope;
     private ownedDefinition;
     private requestPump;

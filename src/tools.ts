@@ -40,6 +40,8 @@ interface UpdateArgs extends ScheduleArgs {
 
 interface IdArgs { readonly id: string }
 
+const SCHEDULE_FIELDS = ['time_zone', 'at', 'every_minutes', 'time', 'weekdays'] as const
+
 function render(_args: unknown, value: JsonValue): { type: 'text'; text: string }[] {
   return [{ type: 'text', text: JSON.stringify(value) }]
 }
@@ -57,7 +59,28 @@ function present(title: string, kind: 'read' | 'other', rawInput?: unknown) {
   return { card: 'generic' as const, title, kind, ...(rawInput === undefined ? {} : { rawInput }) }
 }
 
+function validateScheduleSelector(args: ScheduleArgs): void {
+  const presentFields = SCHEDULE_FIELDS.filter(field => args[field] !== undefined)
+  if (args.kind === undefined) {
+    if (presentFields.length > 0) throw new Error('kind is required when changing schedule fields')
+    return
+  }
+  const required = args.kind === 'once'
+    ? ['time_zone', 'at'] as const
+    : args.kind === 'interval'
+      ? ['time_zone', 'every_minutes'] as const
+      : args.kind === 'daily'
+        ? ['time_zone', 'time'] as const
+        : ['time_zone', 'time', 'weekdays'] as const
+  const allowed = new Set<string>(required)
+  const missing = required.filter(field => args[field] === undefined)
+  if (missing.length > 0) throw new Error(`${args.kind} schedule requires ${missing.join(', ')}`)
+  const unrelated = presentFields.filter(field => !allowed.has(field))
+  if (unrelated.length > 0) throw new Error(`${args.kind} schedule does not accept ${unrelated.join(', ')}`)
+}
+
 function scheduleFromArgs(args: ScheduleArgs, now: string): AutomationSchedule {
+  validateScheduleSelector(args)
   const timeZone = String(args.time_zone ?? '')
   switch (args.kind) {
     case 'once':
@@ -98,7 +121,7 @@ export function registerAutomationTools(service: AutomationService, agent: ToolA
       },
       output: JSON_OUTPUT,
       async execute(args: CreateArgs, exec: ToolRunContext) {
-        if (String(exec.agent?.id) !== agent.id || exec.signal.aborted) return json({ ok: false, code: 'cancelled' })
+        if (exec.agent !== agent || exec.signal.aborted) return json({ ok: false, code: 'cancelled' })
         try {
           const now = new Date().toISOString()
           const value = await service.create(scope, {
@@ -106,9 +129,10 @@ export function registerAutomationTools(service: AutomationService, agent: ToolA
             prompt: args.prompt,
             schedule: scheduleFromArgs(args, now),
             permissionPreset: args.permission ?? 'read-only',
-          })
+          }, exec.signal)
           return json({ ok: true, automation: value })
         } catch (error: unknown) {
+          if (exec.signal.aborted) return json({ ok: false, code: 'cancelled' })
           return json({ ok: false, code: 'invalid_automation', message: error instanceof Error ? error.message : String(error) })
         }
       },
@@ -121,10 +145,11 @@ export function registerAutomationTools(service: AutomationService, agent: ToolA
       parameters: {},
       output: JSON_OUTPUT,
       async execute(_args: Record<string, never>, exec: ToolRunContext) {
-        if (String(exec.agent?.id) !== agent.id || exec.signal.aborted) return json({ ok: false, code: 'cancelled' })
+        if (exec.agent !== agent || exec.signal.aborted) return json({ ok: false, code: 'cancelled' })
         try {
-          return json({ ok: true, value: await service.snapshot(scope) })
+          return json({ ok: true, value: await service.snapshot(scope, exec.signal) })
         } catch (error: unknown) {
+          if (exec.signal.aborted) return json({ ok: false, code: 'cancelled' })
           return json({ ok: false, code: 'automation_error', message: error instanceof Error ? error.message : String(error) })
         }
       },
@@ -149,8 +174,9 @@ export function registerAutomationTools(service: AutomationService, agent: ToolA
       },
       output: JSON_OUTPUT,
       async execute(args: UpdateArgs, exec: ToolRunContext) {
-        if (String(exec.agent?.id) !== agent.id || exec.signal.aborted) return json({ ok: false, code: 'cancelled' })
+        if (exec.agent !== agent || exec.signal.aborted) return json({ ok: false, code: 'cancelled' })
         try {
+          validateScheduleSelector(args)
           const input: {
             name?: string
             prompt?: string
@@ -164,9 +190,10 @@ export function registerAutomationTools(service: AutomationService, agent: ToolA
           if (args.permission !== undefined) input.permissionPreset = args.permission as PermissionPreset
           if (args.kind !== undefined) input.schedule = scheduleFromArgs(args, new Date().toISOString())
           if (Object.keys(input).length === 0) throw new Error('automation_update requires at least one changed field')
-          const value = await service.update(scope, args.id, input)
+          const value = await service.update(scope, args.id, input, exec.signal)
           return json({ ok: true, automation: value })
         } catch (error: unknown) {
+          if (exec.signal.aborted) return json({ ok: false, code: 'cancelled' })
           return json({ ok: false, code: 'automation_error', message: error instanceof Error ? error.message : String(error) })
         }
       },
@@ -179,11 +206,12 @@ export function registerAutomationTools(service: AutomationService, agent: ToolA
       parameters: {},
       output: JSON_OUTPUT,
       async execute(_args: Record<string, never>, exec: ToolRunContext) {
-        if (String(exec.agent?.id) !== agent.id || exec.signal.aborted) return json({ ok: false, code: 'cancelled' })
+        if (exec.agent !== agent || exec.signal.aborted) return json({ ok: false, code: 'cancelled' })
         try {
-          const snapshot = await service.snapshot(scope)
+          const snapshot = await service.snapshot(scope, exec.signal)
           return json({ ok: true, generatedAt: snapshot.generatedAt, runs: snapshot.runs })
         } catch (error: unknown) {
+          if (exec.signal.aborted) return json({ ok: false, code: 'cancelled' })
           return json({ ok: false, code: 'automation_error', message: error instanceof Error ? error.message : String(error) })
         }
       },
@@ -196,10 +224,11 @@ export function registerAutomationTools(service: AutomationService, agent: ToolA
       parameters: { id: { type: 'string', required: true } },
       output: JSON_OUTPUT,
       async execute(args: IdArgs, exec: ToolRunContext) {
-        if (String(exec.agent?.id) !== agent.id || exec.signal.aborted) return json({ ok: false, code: 'cancelled' })
+        if (exec.agent !== agent || exec.signal.aborted) return json({ ok: false, code: 'cancelled' })
         try {
-          return json({ ok: true, run: await service.runNow(scope, args.id) })
+          return json({ ok: true, run: await service.runNow(scope, args.id, exec.signal) })
         } catch (error: unknown) {
+          if (exec.signal.aborted) return json({ ok: false, code: 'cancelled' })
           return json({ ok: false, code: 'automation_error', message: error instanceof Error ? error.message : String(error) })
         }
       },
@@ -212,10 +241,11 @@ export function registerAutomationTools(service: AutomationService, agent: ToolA
       parameters: { id: { type: 'string', required: true } },
       output: JSON_OUTPUT,
       async execute(args: IdArgs, exec: ToolRunContext) {
-        if (String(exec.agent?.id) !== agent.id || exec.signal.aborted) return json({ ok: false, code: 'cancelled' })
+        if (exec.agent !== agent || exec.signal.aborted) return json({ ok: false, code: 'cancelled' })
         try {
-          return json({ ok: true, value: await service.delete(scope, args.id) })
+          return json({ ok: true, value: await service.delete(scope, args.id, exec.signal) })
         } catch (error: unknown) {
+          if (exec.signal.aborted) return json({ ok: false, code: 'cancelled' })
           return json({ ok: false, code: 'automation_error', message: error instanceof Error ? error.message : String(error) })
         }
       },

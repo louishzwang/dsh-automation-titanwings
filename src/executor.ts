@@ -133,6 +133,7 @@ export async function executeAutomationRun(
   const sessionId = SessionId(config.sessionId)
   let handle: Awaited<ReturnType<Context['agents']['create']>> | undefined
   let timeout: ReturnType<typeof setTimeout> | undefined
+  let removeCancellationListener = () => {}
   try {
     handle = await ctx.agents.withoutInitiator(() => ctx.agents.create({
       sessionId,
@@ -180,9 +181,13 @@ export async function executeAutomationRun(
         resolve()
       }
       if (config.signal.aborted) cancel()
-      else config.signal.addEventListener('abort', cancel, { once: true })
+      else {
+        config.signal.addEventListener('abort', cancel, { once: true })
+        removeCancellationListener = () => { config.signal?.removeEventListener('abort', cancel) }
+      }
     })
     await Promise.race([idle, deadline, cancellation])
+    removeCancellationListener()
     if (timedOut || aborted) await handle.agent.whenIdle()
     if (timeout !== undefined) clearTimeout(timeout)
     await ctx.sessions.flush(handle.agent.session)
@@ -223,6 +228,7 @@ export async function executeAutomationRun(
       },
     }
   } finally {
+    removeCancellationListener()
     if (timeout !== undefined) clearTimeout(timeout)
     await handle?.dispose().catch(() => {})
   }

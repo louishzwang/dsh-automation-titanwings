@@ -74,6 +74,10 @@ function toIso(ms = Date.now()): string {
   return new Date(ms).toISOString()
 }
 
+function throwIfCancelled(signal?: AbortSignal): void {
+  if (signal?.aborted === true) throw new Error('The automation request was cancelled.')
+}
+
 function compareRuns(left: AutomationRun, right: AutomationRun): number {
   return Date.parse(right.scheduledFor) - Date.parse(left.scheduledFor)
     || right.id.localeCompare(left.id)
@@ -148,33 +152,37 @@ export class AutomationService {
     await this.domain.close()
   }
 
-  async snapshot(scope: AutomationScope): Promise<AutomationSnapshot> {
-    const resolved = await this.resolveScope(scope)
-    const definitions = [...this.definitions.entries()]
-      .map(([, definition]) => definition)
-      .filter(definition => definition.workspaceId === resolved.workspace.id)
-      .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))
-    const workspaceRuns = [...this.runs.entries()]
-      .map(([, run]) => run)
-      .filter(run => run.targetSnapshot.workspaceId === resolved.workspace.id)
-      .sort(compareRuns)
-    const runs = workspaceRuns.slice(0, this.config.historyLimit)
-    const generatedAt = toIso()
-    return {
-      generatedAt,
-      workspace: resolved.workspace,
-      definitions: definitions.map((definition) => ({
-        ...definition,
-        nextRunAt: definition.status === 'active' ? nextOccurrence(definition.schedule, generatedAt) : null,
-        lastRun: workspaceRuns.find(run => run.automationId === definition.id) ?? null,
-      })),
-      runs,
-    }
+  async snapshot(scope: AutomationScope, signal?: AbortSignal): Promise<AutomationSnapshot> {
+    return this.serialize(async () => {
+      const resolved = await this.resolveScope(scope)
+      throwIfCancelled(signal)
+      const definitions = [...this.definitions.entries()]
+        .map(([, definition]) => definition)
+        .filter(definition => definition.workspaceId === resolved.workspace.id)
+        .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))
+      const workspaceRuns = [...this.runs.entries()]
+        .map(([, run]) => run)
+        .filter(run => run.targetSnapshot.workspaceId === resolved.workspace.id)
+        .sort(compareRuns)
+      const runs = workspaceRuns.slice(0, this.config.historyLimit)
+      const generatedAt = toIso()
+      return {
+        generatedAt,
+        workspace: resolved.workspace,
+        definitions: definitions.map((definition) => ({
+          ...definition,
+          nextRunAt: definition.status === 'active' ? nextOccurrence(definition.schedule, generatedAt) : null,
+          lastRun: workspaceRuns.find(run => run.automationId === definition.id) ?? null,
+        })),
+        runs,
+      }
+    }, signal)
   }
 
-  async create(scope: AutomationScope, request: CreateRequest): Promise<AutomationDefinition> {
+  async create(scope: AutomationScope, request: CreateRequest, signal?: AbortSignal): Promise<AutomationDefinition> {
     const definition = await this.serialize(async () => {
       const resolved = await this.resolveScope(scope)
+      throwIfCancelled(signal)
       const now = toIso()
       if (request.schedule.kind === 'once' && nextOccurrence(request.schedule, now) === null) {
         throw new Error('A one-time automation must be scheduled in the future.')
@@ -200,7 +208,7 @@ export class AutomationService {
       })
       await this.definitions.put(value.id, value)
       return value
-    })
+    }, signal)
     this.requestPump()
     return definition
   }
@@ -209,9 +217,11 @@ export class AutomationService {
     scope: AutomationScope,
     id: string,
     input: Omit<UpdateAutomationInput, 'now'> & { readonly status?: 'active' | 'paused' },
+    signal?: AbortSignal,
   ): Promise<AutomationDefinition> {
     const next = await this.serialize(async () => {
       const current = await this.ownedDefinition(scope, id)
+      throwIfCancelled(signal)
       const now = toIso()
       const { status, ...fields } = input
       if (fields.schedule?.kind === 'once' && nextOccurrence(fields.schedule, now) === null) {
@@ -224,24 +234,30 @@ export class AutomationService {
       if (status === 'active') value = resumeDefinition(value, now)
       if (value !== current) await this.definitions.put(id, value)
       return value
-    })
+    }, signal)
     this.requestPump()
     return next
   }
 
-  async delete(scope: AutomationScope, id: string): Promise<{ readonly id: string; readonly deleted: boolean }> {
+  async delete(
+    scope: AutomationScope,
+    id: string,
+    signal?: AbortSignal,
+  ): Promise<{ readonly id: string; readonly deleted: boolean }> {
     const deleted = await this.serialize(async () => {
       const current = await this.ownedDefinition(scope, id)
+      throwIfCancelled(signal)
       deleteDefinition(current)
       return this.definitions.delete(id)
-    })
+    }, signal)
     this.requestPump()
     return { id, deleted }
   }
 
-  async runNow(scope: AutomationScope, id: string): Promise<AutomationRun> {
+  async runNow(scope: AutomationScope, id: string, signal?: AbortSignal): Promise<AutomationRun> {
     const run = await this.serialize(async () => {
       const definition = await this.ownedDefinition(scope, id)
+      throwIfCancelled(signal)
       const alreadyActive = [...this.runs.entries()].some(([, candidate]) => (
         candidate.automationId === id
         && (candidate.status === 'queued' || candidate.status === 'running')
@@ -250,19 +266,25 @@ export class AutomationService {
       const value = createManualRun(definition, toIso())
       await this.runs.put(value.id, value)
       return value
-    })
+    }, signal)
     this.requestPump()
     return run
   }
 
-  async markRead(scope: AutomationScope, runId: string): Promise<AutomationRun> {
-    const run = this.runs.get(runId)
-    if (run === undefined) throw new Error(`unknown automation run '${runId}'`)
-    await this.ownedDefinition(scope, run.automationId)
-    if (!run.unread) return run
-    const next = { ...run, unread: false }
-    await this.runs.put(runId, next)
-    return next
+  async markRead(scope: AutomationScope, runId: string, signal?: AbortSignal): Promise<AutomationRun> {
+    return this.serialize(async () => {
+      const run = this.runs.get(runId)
+      if (run === undefined) throw new Error(`unknown automation run '${runId}'`)
+      const { workspace } = await this.resolveScope(scope)
+      throwIfCancelled(signal)
+      if (run.targetSnapshot.workspaceId !== workspace.id) {
+        throw new Error('The automation run belongs to another workspace.')
+      }
+      if (!run.unread) return run
+      const next = { ...run, unread: false }
+      await this.runs.put(runId, next)
+      return next
+    }, signal)
   }
 
   private async resolveScope(scope: AutomationScope) {
@@ -272,6 +294,9 @@ export class AutomationService {
     if (cwd === undefined) throw new Error('The source session has no workspace directory.')
     const workspace = await this.ctx.workspaceRegistry.resolveByPath(cwd)
     if (workspace === undefined) throw new Error('The source session directory is not registered as a DSH workspace.')
+    if (this.ctx.agents.get(SessionId(scope.sessionId)) !== agent) {
+      throw new Error('The automation UI/tool requires a live source session.')
+    }
     return { agent, workspace }
   }
 
@@ -321,7 +346,9 @@ export class AutomationService {
 
   private async claimLatestDue(definition: AutomationDefinition, now: string): Promise<void> {
     const scheduledFor = latestDueOccurrence(definition.schedule, now)
-    if (scheduledFor === null || Date.parse(scheduledFor) < Date.parse(definition.updatedAt)) return
+    // Creation, edits, and resume establish an exclusive activation boundary:
+    // only occurrences strictly after it are eligible for unattended work.
+    if (scheduledFor === null || Date.parse(scheduledFor) <= Date.parse(definition.updatedAt)) return
     const related = [...this.runs.entries()].map(([, run]) => run)
       .filter(run => run.automationId === definition.id)
     if (related.some(run => run.trigger === 'schedule' && run.scheduledFor === scheduledFor)) return
@@ -404,6 +431,7 @@ export class AutomationService {
         finishedAt: toIso(),
         error: { code: 'definition_deleted', message: 'The automation was deleted before this run started.' },
       })
+      await this.pruneWorkspaceHistory(run.targetSnapshot.workspaceId)
       return
     }
     const startedAt = toIso()
@@ -465,9 +493,13 @@ export class AutomationService {
   }
 
   /** Serialize service-level mutations and scheduler admission around domain writes. */
-  private serialize<T>(operation: () => Promise<T>): Promise<T> {
+  private serialize<T>(operation: () => Promise<T>, signal?: AbortSignal): Promise<T> {
     if (this.stopping) return Promise.reject(new Error('The automation service is stopping.'))
-    const result = this.operationTail.then(operation)
+    if (signal?.aborted === true) return Promise.reject(new Error('The automation request was cancelled.'))
+    const result = this.operationTail.then(async () => {
+      throwIfCancelled(signal)
+      return operation()
+    })
     this.operationTail = result.then(() => {}, () => {})
     return result
   }

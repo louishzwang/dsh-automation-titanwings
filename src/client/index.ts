@@ -34,10 +34,11 @@ export function apply(ctx: ClientContext): void {
         createAutomation: runtime.createAutomation,
         mutateAutomation: runtime.mutateAutomation,
         runNow: runtime.runNow,
-        openSession: async (runSessionId) => {
+        markRunRead: runtime.markRunRead,
+        openSession: (runId, runSessionId) => runtime!.openRunSession(runId, async () => {
           await ctx.sessions.refresh()
           ctx.sessions.open(runSessionId)
-        },
+        }),
       }
     },
   }, AutomationView))

@@ -9,6 +9,7 @@ import {
   formatSchedule,
 } from '../src/client/helpers.js'
 import { en, zh } from '../src/client/locales.js'
+import { createAutomationRuntime } from '../src/client/runtime.js'
 import type { AutomationSnapshot } from '../src/client/protocol.js'
 
 const t = (key: keyof typeof en, params?: Record<string, unknown>): string => {
@@ -110,4 +111,36 @@ test('formatSchedule localizes friendly cadence instead of exposing raw RRULE', 
   assert.equal(formatSchedule({
     kind: 'interval', everyMinutes: 30, anchor: '2026-08-13T00:00:00Z', timeZone: 'UTC',
   }, translateZh), '每 30 分钟')
+})
+
+test('opening a run Session marks it read only after navigation succeeds', async () => {
+  const calls: Array<{ endpoint: string; payload: unknown }> = []
+  const rpc = {
+    call: async (_channel: string, endpoint: string, payload: unknown) => {
+      calls.push({ endpoint, payload })
+      if (endpoint === 'snapshot') {
+        return {
+          ok: true,
+          value: { scope: { cwd: '/workspace' }, automations: [], runs: [], serverNow: new Date().toISOString() },
+        }
+      }
+      return { ok: true, value: {} }
+    },
+  }
+  const runtime = createAutomationRuntime(rpc, 'session-source')
+
+  await runtime.openRunSession('run-1', async () => {})
+  assert.deepEqual(calls.map(call => call.endpoint), ['mark-read', 'snapshot'])
+  assert.deepEqual(calls[0]?.payload, { sessionId: 'session-source', runId: 'run-1' })
+
+  calls.length = 0
+  await assert.rejects(
+    () => runtime.openRunSession('run-2', async () => { throw new Error('navigation failed') }),
+    /navigation failed/,
+  )
+  assert.equal(calls.length, 0)
+
+  await runtime.markRunRead('run-without-session')
+  assert.deepEqual(calls.map(call => call.endpoint), ['mark-read', 'snapshot'])
+  assert.deepEqual(calls[0]?.payload, { sessionId: 'session-source', runId: 'run-without-session' })
 })

@@ -32,7 +32,7 @@ import type {
 const POLL_INTERVAL_MS = 15_000
 const WEEKDAYS = [1, 2, 3, 4, 5, 6, 7] as const
 
-type BusyAction = 'create' | 'pause' | 'resume' | 'run' | 'delete'
+type BusyAction = 'create' | 'pause' | 'resume' | 'run' | 'read' | 'delete'
 
 function actionKey(action: BusyAction, id = ''): string {
   return `${action}:${id}`
@@ -286,13 +286,18 @@ function AutomationCard(props: AutomationCardProps): JSX.Element {
   )
 }
 
-function RecentRun({ run, now, t, onOpen }: {
+function RecentRun({ run, now, t, busy, onOpen, onMarkRead }: {
   run: AutomationRunViewModel
   now: Date
   t: Translate
-  onOpen: (sessionId: string) => void
+  busy: boolean
+  onOpen: (runId: string, sessionId: string) => void
+  onMarkRead: (runId: string) => void
 }): JSX.Element {
   const timestamp = run.finishedAt ?? run.startedAt ?? run.scheduledFor
+  const canMarkRead = run.unread !== false
+    && (run.status === 'failed' || run.status === 'interrupted'
+      || run.status === 'skipped' || run.status === 'cancelled')
   return (
     <article className="dsh-automation-run">
       <div className="dsh-automation-run-head">
@@ -307,8 +312,13 @@ function RecentRun({ run, now, t, onOpen }: {
         <p className={run.error === undefined ? '' : 'is-error'}>{run.error ?? run.summary}</p>
       )}
       {run.sessionId !== undefined && (
-        <button className="dsh-automation-session-id" type="button" onClick={() => onOpen(run.sessionId!)}>
+        <button className="dsh-automation-session-id" type="button" onClick={() => onOpen(run.id, run.sessionId!)}>
           {t('run.openSession', { id: shortSessionId(run.sessionId) })}
+        </button>
+      )}
+      {canMarkRead && (
+        <button className="dsh-automation-run-review" type="button" onClick={() => onMarkRead(run.id)} disabled={busy}>
+          <CheckIcon />{t('run.markRead')}
         </button>
       )}
     </article>
@@ -317,7 +327,7 @@ function RecentRun({ run, now, t, onOpen }: {
 
 /** Native conversation view: all data and effects arrive through the slot's four shares. */
 export function AutomationView({
-  t, useAutomationState, refresh, createAutomation, mutateAutomation, runNow, openSession,
+  t, useAutomationState, refresh, createAutomation, mutateAutomation, runNow, markRunRead, openSession,
 }: AutomationViewProps): JSX.Element {
   const state = useAutomationState(value => value)
   const [showCreate, setShowCreate] = useState(false)
@@ -355,8 +365,11 @@ export function AutomationView({
   const onRun = (id: string): void => {
     void perform(actionKey('run', id), () => runNow(id))
   }
-  const onOpenSession = (sessionId: string): void => {
-    void perform(actionKey('run', sessionId), () => openSession(sessionId))
+  const onOpenSession = (runId: string, sessionId: string): void => {
+    void perform(actionKey('run', runId), () => openSession(runId, sessionId))
+  }
+  const onMarkRead = (runId: string): void => {
+    void perform(actionKey('read', runId), () => markRunRead(runId))
   }
   const onCreate = async (input: ReturnType<typeof buildCreateInput>): Promise<void> => {
     await perform(actionKey('create'), async () => {
@@ -463,7 +476,15 @@ export function AutomationView({
           {snapshot.runs.length === 0
             ? <div className="dsh-automation-runs-empty">{t('runs.empty')}</div>
             : <div className="dsh-automation-run-list">{snapshot.runs.slice(0, 12).map(run => (
-                <RecentRun key={run.id} run={run} now={now} t={t} onOpen={onOpenSession} />
+                <RecentRun
+                  key={run.id}
+                  run={run}
+                  now={now}
+                  t={t}
+                  busy={busyKey?.endsWith(`:${run.id}`) === true}
+                  onOpen={onOpenSession}
+                  onMarkRead={onMarkRead}
+                />
               ))}</div>}
         </aside>
       </div>

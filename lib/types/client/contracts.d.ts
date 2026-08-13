@@ -13,7 +13,8 @@ export interface AutomationViewProps {
     readonly createAutomation: AutomationRuntime['createAutomation'];
     readonly mutateAutomation: AutomationRuntime['mutateAutomation'];
     readonly runNow: AutomationRuntime['runNow'];
-    readonly openSession: (sessionId: string) => Promise<void>;
+    readonly markRunRead: AutomationRuntime['markRunRead'];
+    readonly openSession: (runId: string, sessionId: string) => Promise<void>;
 }
 export interface ClientRpc {
     call(channel: string, endpoint: string, payload: unknown, signal?: AbortSignal): Promise<unknown>;
@@ -50,7 +51,8 @@ export interface ClientContext {
                 readonly createAutomation: AutomationRuntime['createAutomation'];
                 readonly mutateAutomation: AutomationRuntime['mutateAutomation'];
                 readonly runNow: AutomationRuntime['runNow'];
-                readonly openSession: (sessionId: string) => Promise<void>;
+                readonly markRunRead: AutomationRuntime['markRunRead'];
+                readonly openSession: (runId: string, sessionId: string) => Promise<void>;
             };
         }, component: ComponentType<AutomationViewProps>): () => void;
     };

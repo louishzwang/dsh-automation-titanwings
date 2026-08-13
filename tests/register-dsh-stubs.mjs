@@ -6,6 +6,8 @@ const runtimePackages = new Set([
   '@deepseek-ai/dsh-llm',
   '@deepseek-ai/dsh-sandbox-policy',
   '@deepseek-ai/dsh-session',
+  '@deepseek-ai/dsh-tools',
+  '@deepseek-ai/schemastery',
   '@deepseek-ai/dsh-user-approval',
   '@deepseek-ai/dsh-workspace',
 ])

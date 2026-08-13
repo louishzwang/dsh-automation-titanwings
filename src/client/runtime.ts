@@ -3,6 +3,7 @@ import type {
   AutomationSnapshot,
   CreateAutomationInput,
   CreateRequest,
+  MarkReadRequest,
   MutateRequest,
   RunNowRequest,
   SnapshotRequest,
@@ -29,6 +30,8 @@ export interface AutomationRuntime {
   createAutomation(input: CreateAutomationInput): Promise<void>
   mutateAutomation(automationId: string, mutation: MutateRequest['mutation']): Promise<void>
   runNow(automationId: string): Promise<void>
+  markRunRead(runId: string): Promise<void>
+  openRunSession(runId: string, open: () => Promise<void>): Promise<void>
 }
 
 /** One session-scoped observable; the framework binds it into useAutomationState. */
@@ -90,6 +93,10 @@ export function createAutomationRuntime(rpc: ClientRpc, sessionId: string): Auto
     if (pendingBeforeRefresh !== undefined) await pendingBeforeRefresh.catch(() => undefined)
     await refresh()
   }
+  const markRunRead = async (runId: string): Promise<void> => {
+    const payload: MarkReadRequest = { sessionId, runId }
+    await mutateThenRefresh('mark-read', payload)
+  }
 
   return {
     source,
@@ -105,6 +112,13 @@ export function createAutomationRuntime(rpc: ClientRpc, sessionId: string): Auto
     async runNow(automationId) {
       const payload: RunNowRequest = { sessionId, automationId }
       await mutateThenRefresh('run-now', payload)
+    },
+    markRunRead,
+    async openRunSession(runId, open) {
+      // A failed navigation must leave the run unread so it still asks for
+      // attention. Mark it only after the destination Session is available.
+      await open()
+      await markRunRead(runId)
     },
   }
 }

@@ -33,6 +33,11 @@ function optionalString(value: unknown, label: string): string | undefined {
   return value === undefined ? undefined : string(value, label)
 }
 
+function integer(value: unknown, label: string): number {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value)) throw new Error(`${label} must be an integer`)
+  return value
+}
+
 function toDomainSchedule(raw: unknown, timeZone: string): DomainSchedule {
   const schedule = record(raw, 'schedule')
   const kind = string(schedule.kind, 'schedule.kind')
@@ -40,8 +45,7 @@ function toDomainSchedule(raw: unknown, timeZone: string): DomainSchedule {
     case 'once':
       return { kind, at: string(schedule.at, 'schedule.at'), timeZone }
     case 'interval': {
-      const everyMinutes = Number(schedule.everyMinutes)
-      if (!Number.isSafeInteger(everyMinutes)) throw new Error('schedule.everyMinutes must be an integer')
+      const everyMinutes = integer(schedule.everyMinutes, 'schedule.everyMinutes')
       return {
         kind,
         everyMinutes,
@@ -54,7 +58,7 @@ function toDomainSchedule(raw: unknown, timeZone: string): DomainSchedule {
     case 'weekly': {
       if (!Array.isArray(schedule.weekdays)) throw new Error('schedule.weekdays must be an array')
       const weekdays = schedule.weekdays.map((value) => {
-        const number = Number(value)
+        const number = integer(value, 'schedule.weekdays[]')
         const weekday = WEEKDAYS[number - 1]
         if (weekday === undefined) throw new Error('schedule.weekdays must contain numbers from 1 to 7')
         return weekday
@@ -85,7 +89,7 @@ function errorResult(
     }
   }
   const message = error instanceof Error ? error.message : String(error)
-  const badRequest = /must|required|unknown automation|another workspace|scheduled in the future|already has a queued or running run|not registered|requires a live source session|has no workspace/.test(message)
+  const badRequest = /must|required|unknown automation|another workspace|scheduled in the future|already has a queued or running run|not registered|requires a live source session|has no workspace|request was cancelled/.test(message)
   return {
     ok: false,
     error: {
@@ -100,8 +104,8 @@ function scopeOf(payload: Record<string, unknown>) {
   return { sessionId: string(payload.sessionId, 'sessionId'), creatorKind: 'web' as const }
 }
 
-async function snapshotValue(service: AutomationService, payload: Record<string, unknown>) {
-  const snapshot = await service.snapshot(scopeOf(payload))
+async function snapshotValue(service: AutomationService, payload: Record<string, unknown>, signal: AbortSignal) {
+  const snapshot = await service.snapshot(scopeOf(payload), signal)
   const names = new Map(snapshot.definitions.map(definition => [definition.id, definition.name]))
   return {
     scope: {
@@ -154,7 +158,7 @@ export function registerAutomationRpc(ctx: RpcContext, service: AutomationServic
       const payload = record(rawPayload, 'payload')
       switch (endpoint) {
         case 'snapshot':
-          return { ok: true, value: await snapshotValue(service, payload) }
+          return { ok: true, value: await snapshotValue(service, payload, signal) }
         case 'create': {
           const input = record(payload.input, 'input')
           const timeZone = string(input.timeZone, 'input.timeZone')
@@ -167,26 +171,30 @@ export function registerAutomationRpc(ctx: RpcContext, service: AutomationServic
             prompt: string(input.prompt, 'input.prompt'),
             schedule: toDomainSchedule(input.schedule, timeZone),
             permissionPreset: permission,
-          })
+          }, signal)
           return { ok: true, value: { id: value.id, revision: value.revision } }
         }
         case 'mutate': {
           const id = string(payload.automationId, 'automationId')
           const mutation = string(payload.mutation, 'mutation')
           if (mutation === 'delete') {
-            return { ok: true, value: await service.delete(scopeOf(payload), id) }
+            return { ok: true, value: await service.delete(scopeOf(payload), id, signal) }
           }
           if (mutation !== 'pause' && mutation !== 'resume') {
             throw new Error('mutation must be pause, resume, or delete')
           }
           const value = await service.update(scopeOf(payload), id, {
             status: mutation === 'pause' ? 'paused' : 'active',
-          })
+          }, signal)
           return { ok: true, value: { id: value.id, revision: value.revision } }
         }
         case 'run-now': {
-          const run = await service.runNow(scopeOf(payload), string(payload.automationId, 'automationId'))
+          const run = await service.runNow(scopeOf(payload), string(payload.automationId, 'automationId'), signal)
           return { ok: true, value: { runId: run.id } }
+        }
+        case 'mark-read': {
+          const run = await service.markRead(scopeOf(payload), string(payload.runId, 'runId'), signal)
+          return { ok: true, value: { runId: run.id, unread: run.unread } }
         }
         default:
           throw new Error(`unknown automation endpoint '${endpoint}'`)

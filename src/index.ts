@@ -27,15 +27,26 @@ export const Config = z.object({
   historyLimit: z.number().step(1).min(1).max(5_000).default(200),
 })
 
-const MUTATING_TOOLS = new Set(['automation_create', 'automation_update', 'automation_run_now'])
+const MUTATING_TOOLS = new Set([
+  'automation_create', 'automation_update', 'automation_run_now', 'automation_delete',
+])
 
-function needsHumanApproval(exec: { readonly name: string; readonly arguments?: unknown }): boolean {
-  if (!MUTATING_TOOLS.has(exec.name)) return false
+export function needsHumanApproval(
+  exec: { readonly name: string; readonly arguments?: unknown; readonly signal: AbortSignal },
+  isMountedAgent: boolean,
+): boolean {
+  if (!isMountedAgent || exec.signal.aborted || !MUTATING_TOOLS.has(exec.name)) return false
   if (exec.name !== 'automation_update') return true
   const args = typeof exec.arguments === 'object' && exec.arguments !== null
     ? exec.arguments as Record<string, unknown>
     : {}
   return !(args.status === 'paused' && Object.keys(args).every(key => key === 'id' || key === 'status'))
+}
+
+export function humanApprovalReason(toolName: string): string {
+  return toolName === 'automation_delete'
+    ? 'This action permanently deletes an automation definition. Its run history is retained, but the schedule cannot be restored automatically.'
+    : 'This action creates or expands unattended future work. Review its prompt, schedule, workspace, and permission boundary.'
 }
 
 /** Mount one host-wide authority and agent-scoped management tools. */
@@ -94,10 +105,10 @@ export async function apply(ctx: Context, rawConfig: Config): Promise<void> {
       stopDisposed = ctx.on('agent/disposed', ({ agent }: any) => { agentTools.delete(agent) })
       stopApproval = ctx.on('tools/pre-execute', async (exec: any, next: () => Promise<any>) => {
         const downstream = await next()
-        if (downstream.kind !== 'allow' || !needsHumanApproval(exec)) return downstream
+        if (downstream.kind !== 'allow' || !needsHumanApproval(exec, agentTools.has(exec.agent))) return downstream
         return {
           kind: 'ask' as const,
-          reason: 'This action creates or expands unattended future work. Review its prompt, schedule, workspace, and permission boundary.',
+          reason: humanApprovalReason(exec.name),
         }
       })
       removeRpc = registerAutomationRpc(ctx, service)

@@ -9,6 +9,12 @@ export interface Config {
     readonly historyLimit?: number;
 }
 export declare const Config: any;
+export declare function needsHumanApproval(exec: {
+    readonly name: string;
+    readonly arguments?: unknown;
+    readonly signal: AbortSignal;
+}, isMountedAgent: boolean): boolean;
+export declare function humanApprovalReason(toolName: string): string;
 /** Mount one host-wide authority and agent-scoped management tools. */
 export declare function apply(ctx: Context, rawConfig: Config): Promise<void>;
 export type * from './types.ts';
