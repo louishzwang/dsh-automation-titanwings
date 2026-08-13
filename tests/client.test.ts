@@ -26,6 +26,12 @@ test('English and Chinese dictionaries own exactly the same keys', () => {
   assert.equal(zh.tab, '自动化')
 })
 
+test('overview labels distinguish enabled definitions from running executions', () => {
+  assert.equal(en['stats.active'], 'Active')
+  assert.equal(zh['stats.active'], '已启用')
+  assert.notEqual(zh['stats.active'], zh['status.running'])
+})
+
 test('buildCreateInput trims text and normalizes a weekly schedule', () => {
   const form = {
     ...defaultFormState(new Date('2026-08-13T00:00:00Z')),

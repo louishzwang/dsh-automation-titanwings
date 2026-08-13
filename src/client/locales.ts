@@ -117,7 +117,7 @@ export const zh: Record<AutomationLocaleKey, string> = {
   'scope.workspace': '工作区',
   'scope.folder': '工作目录',
   'stats.total': '全部',
-  'stats.active': '运行中',
+  'stats.active': '已启用',
   'stats.next': '下次运行',
   'stats.attention': '需要关注',
   'stats.noneScheduled': '暂无计划',
