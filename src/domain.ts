@@ -133,6 +133,7 @@ export function updateDefinition(
     revision: current.revision + 1,
     name: input.name === undefined ? current.name : requireNonBlank(input.name, 'name'),
     prompt: input.prompt === undefined ? current.prompt : requireNonBlank(input.prompt, 'prompt'),
+    status: input.status ?? current.status,
     schedule,
     rrule: scheduleToRRule(schedule),
     timeZone: schedule.timeZone,

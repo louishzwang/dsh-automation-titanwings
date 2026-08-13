@@ -13,8 +13,6 @@ import {
   createManualRun,
   createScheduledRun,
   deleteDefinition,
-  pauseDefinition,
-  resumeDefinition,
   updateDefinition,
 } from './domain.ts'
 import { executeAutomationRun } from './executor.ts'
@@ -227,11 +225,10 @@ export class AutomationService {
       if (fields.schedule?.kind === 'once' && nextOccurrence(fields.schedule, now) === null) {
         throw new Error('A one-time automation must be scheduled in the future.')
       }
-      let value = Object.keys(fields).length === 0
+      const statusChanged = status !== undefined && status !== current.status
+      const value = Object.keys(fields).length === 0 && !statusChanged
         ? current
-        : updateDefinition(current, { ...fields, now })
-      if (status === 'paused') value = pauseDefinition(value, now)
-      if (status === 'active') value = resumeDefinition(value, now)
+        : updateDefinition(current, { ...fields, ...(status === undefined ? {} : { status }), now })
       if (value !== current) await this.definitions.put(id, value)
       return value
     }, signal)

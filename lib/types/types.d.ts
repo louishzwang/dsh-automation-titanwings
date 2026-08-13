@@ -108,6 +108,7 @@ export interface CreateAutomationInput {
 export interface UpdateAutomationInput {
     readonly name?: string;
     readonly prompt?: string;
+    readonly status?: AutomationStatus;
     readonly schedule?: AutomationSchedule;
     readonly agentPreset?: string;
     readonly provider?: string | null;

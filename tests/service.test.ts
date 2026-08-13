@@ -200,6 +200,24 @@ test('concurrent updates are serialized and a deletion cannot be resurrected', a
   await service.dispose()
 })
 
+test('one update that changes fields and status advances the definition revision once', async () => {
+  const { service } = await harness()
+  const definition = await service.create(scope, {
+    name: 'Combined update',
+    prompt: 'Inspect repository health.',
+    schedule: { kind: 'daily', time: '09:00', timeZone: 'UTC' },
+  })
+
+  const paused = await service.update(scope, definition.id, {
+    name: 'Paused health report',
+    status: 'paused',
+  })
+  assert.equal(paused.revision, definition.revision + 1)
+  assert.equal(paused.name, 'Paused health report')
+  assert.equal(paused.status, 'paused')
+  await service.dispose()
+})
+
 test('mark read is workspace-scoped and clears durable attention state', async () => {
   const definition = storedDefinition('2026-08-13T00:00:00Z')
   const failed: AutomationRun = {

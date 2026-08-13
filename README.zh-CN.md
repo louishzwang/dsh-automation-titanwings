@@ -5,7 +5,7 @@
 ### *让 Coding 任务按计划在全新 Agent Session 中运行，并随时管理定时任务。*
 
 [![DeepSeek Harness](https://img.shields.io/badge/DeepSeek%20Harness-plugin-4D6BFE)](https://github.com/deepseek-ai)
-[![Version](https://img.shields.io/badge/version-0.1.4-4D6BFE)](package.json)
+[![Version](https://img.shields.io/badge/version-0.1.5-4D6BFE)](package.json)
 [![Node.js](https://img.shields.io/badge/Node.js-22.19%2B-4D6BFE)](package.json)
 [![License: MIT](https://img.shields.io/badge/license-MIT-4D6BFE)](LICENSE)
 [![GitHub stars](https://img.shields.io/github/stars/titanwings/dsh-automation?style=social)](https://github.com/titanwings/dsh-automation/stargazers)
@@ -107,7 +107,7 @@ Run 会经历 `queued`、`running`，最终进入 `succeeded`、`failed`、`skip
 把 GitHub bundle 安装进 DSH Web profile，然后重启 `dsh web`：
 
 ```bash
-dsh plugin --profile web add github:titanwings/dsh-automation#v0.1.4
+dsh plugin --profile web add github:titanwings/dsh-automation#v0.1.5
 ```
 
 版本 tag 可以保证可重复部署；使用已经审阅的 commit SHA 也可以。如果你从 DSH 源码目录运行，请用 `pnpm dsh` 代替 `dsh`。
