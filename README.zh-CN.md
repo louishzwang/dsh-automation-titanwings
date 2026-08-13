@@ -35,6 +35,10 @@ dispatch 的 occurrence 都会在全新 root Agent 与 Session 中启动，并�
 
 [English](README.md) · **简体中文**
 
+<br>
+
+![dsh-automation — 计划、运行、留存](docs/social-preview.png)
+
 </div>
 
 ---

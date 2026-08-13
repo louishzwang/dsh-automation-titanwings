@@ -36,6 +36,10 @@ auditable record.
 
 **English** · [简体中文](README.zh-CN.md)
 
+<br>
+
+![dsh-automation — Schedule. Run. Remember.](docs/social-preview.png)
+
 </div>
 
 ---
