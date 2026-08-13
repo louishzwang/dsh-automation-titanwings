@@ -4,11 +4,11 @@
 
 ### *Schedule the work. Start a fresh Session. Keep the evidence.*
 
-[![DeepSeek Harness](https://img.shields.io/badge/DeepSeek%20Harness-plugin-4D6BFE)](https://github.com/dsh-external)
-[![Version](https://img.shields.io/badge/version-0.1.0-4D6BFE)](package.json)
+[![DeepSeek Harness](https://img.shields.io/badge/DeepSeek%20Harness-plugin-4D6BFE)](https://github.com/deepseek-ai)
+[![Version](https://img.shields.io/badge/version-0.1.1-4D6BFE)](package.json)
 [![Node.js](https://img.shields.io/badge/Node.js-22.19%2B-4D6BFE)](package.json)
 [![License: MIT](https://img.shields.io/badge/license-MIT-4D6BFE)](LICENSE)
-[![GitHub stars](https://img.shields.io/github/stars/dsh-external/dsh-automation?style=social)](https://github.com/dsh-external/dsh-automation/stargazers)
+[![GitHub stars](https://img.shields.io/github/stars/titanwings/dsh-automation?style=social)](https://github.com/titanwings/dsh-automation/stargazers)
 
 <br>
 
@@ -102,7 +102,7 @@ Updating a definition increments its revision, so each retained run still identi
 Install the GitHub bundle into the DSH Web profile, then restart `dsh web`:
 
 ```bash
-dsh plugin --profile web add github:dsh-external/dsh-automation#v0.1.0
+dsh plugin --profile web add github:titanwings/dsh-automation#v0.1.1
 ```
 
 The version tag keeps the install reproducible; a reviewed commit SHA is equally valid. If you run DSH from its source checkout, use `pnpm dsh` in place of `dsh`.
@@ -115,7 +115,7 @@ The version tag keeps the install reproducible; a reviewed commit SHA is equally
 Node.js 22.19 or newer is required.
 
 ```bash
-git clone https://github.com/dsh-external/dsh-automation.git
+git clone https://github.com/titanwings/dsh-automation.git
 cd dsh-automation
 pnpm install
 pnpm check

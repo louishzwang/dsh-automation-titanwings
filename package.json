@@ -1,6 +1,6 @@
 {
   "name": "@dsh-external/dsh-automation",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Durable autonomous scheduled runs for DeepSeek Harness, with agent tools, fresh sessions, audit history, and a native Web control center",
   "type": "module",
   "main": "./lib/index.js",
@@ -27,12 +27,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/dsh-external/dsh-automation.git"
+    "url": "git+https://github.com/titanwings/dsh-automation.git"
   },
   "bugs": {
-    "url": "https://github.com/dsh-external/dsh-automation/issues"
+    "url": "https://github.com/titanwings/dsh-automation/issues"
   },
-  "homepage": "https://github.com/dsh-external/dsh-automation#readme",
+  "homepage": "https://github.com/titanwings/dsh-automation#readme",
   "engines": {
     "node": "^22.19.0 || >=24.0.0"
   },
