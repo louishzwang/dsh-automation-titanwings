@@ -2,7 +2,7 @@
 
 # ⏱️ dsh-automation
 
-### *定好任务，启动全新 Session，证据留存。*
+### *让 Coding 任务按计划在全新 Agent Session 中运行，并随时管理定时任务。*
 
 [![DeepSeek Harness](https://img.shields.io/badge/DeepSeek%20Harness-plugin-4D6BFE)](https://github.com/deepseek-ai)
 [![Version](https://img.shields.io/badge/version-0.1.1-4D6BFE)](package.json)
@@ -24,7 +24,8 @@
 
 ### ✨ dsh-automation 把三项要求收进同一条工作流。
 
-定义一次；每个真正 dispatch 的 occurrence 都会在全新 root Agent 与 Session 中启动，并留下可审计记录。
+用户和 Agent 都可以在 DSH 中创建、管理、暂停、恢复和查看定时任务；每个真正
+dispatch 的 occurrence 都会在全新 root Agent 与 Session 中启动，并留下可审计记录。
 
 **完整任务 + 运行计划 + 权限边界 → 全新 root Agent + 全新 Session + 持久运行历史**
 

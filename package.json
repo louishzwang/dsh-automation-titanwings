@@ -1,7 +1,7 @@
 {
   "name": "@dsh-external/dsh-automation",
   "version": "0.1.1",
-  "description": "Durable autonomous scheduled runs for DeepSeek Harness, with agent tools, fresh sessions, audit history, and a native Web control center",
+  "description": "Run coding tasks on schedule in fresh Agent sessions, and manage automations from DeepSeek Harness Web or an Agent",
   "type": "module",
   "main": "./lib/index.js",
   "types": "./lib/types/index.d.ts",

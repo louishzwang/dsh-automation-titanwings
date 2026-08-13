@@ -2,7 +2,7 @@
 
 # ⏱️ dsh-automation
 
-### *Schedule the work. Start a fresh Session. Keep the evidence.*
+### *Run coding tasks on schedule. Manage them from Web or Agent.*
 
 [![DeepSeek Harness](https://img.shields.io/badge/DeepSeek%20Harness-plugin-4D6BFE)](https://github.com/deepseek-ai)
 [![Version](https://img.shields.io/badge/version-0.1.1-4D6BFE)](package.json)
@@ -24,7 +24,9 @@
 
 ### ✨ dsh-automation turns all three requirements into one workflow.
 
-Define it once. Every dispatched occurrence starts in a fresh root Agent and Session, then leaves an auditable record.
+Create and manage schedules from DSH Web or any eligible root Agent. Every
+dispatched occurrence starts in a fresh root Agent and Session, then leaves an
+auditable record.
 
 **Self-contained task + schedule + permission boundary → fresh root Agent + fresh Session + durable run history**
 
