@@ -35,7 +35,7 @@ test('package keeps the installable DSH bundle and Web client contract', async (
   })
   assert.ok(manifest.files?.includes('lib'))
   assert.ok(manifest.files?.includes('cordis.patch.yml'))
-  assert.equal(manifest.scripts?.prepare, 'node scripts/build.mjs')
+  assert.equal(manifest.scripts?.prepare, undefined)
 
   const patch = await readFile(new URL('cordis.patch.yml', root), 'utf8')
   assert.match(patch, /^\s*- insert:\s*$/m)

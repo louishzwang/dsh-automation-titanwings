@@ -1,6 +1,6 @@
 {
   "name": "@dsh-external/dsh-automation",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Run coding tasks on schedule in fresh Agent sessions, and manage automations from DeepSeek Harness Web or an Agent",
   "type": "module",
   "main": "./lib/index.js",
@@ -51,7 +51,6 @@
     }
   },
   "scripts": {
-    "prepare": "node scripts/build.mjs",
     "build": "node scripts/build.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "node --import ./tests/register-dsh-stubs.mjs --import tsx --test tests/*.test.ts",

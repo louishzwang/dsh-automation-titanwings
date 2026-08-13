@@ -5,7 +5,7 @@
 ### *让 Coding 任务按计划在全新 Agent Session 中运行，并随时管理定时任务。*
 
 [![DeepSeek Harness](https://img.shields.io/badge/DeepSeek%20Harness-plugin-4D6BFE)](https://github.com/deepseek-ai)
-[![Version](https://img.shields.io/badge/version-0.1.1-4D6BFE)](package.json)
+[![Version](https://img.shields.io/badge/version-0.1.2-4D6BFE)](package.json)
 [![Node.js](https://img.shields.io/badge/Node.js-22.19%2B-4D6BFE)](package.json)
 [![License: MIT](https://img.shields.io/badge/license-MIT-4D6BFE)](LICENSE)
 [![GitHub stars](https://img.shields.io/github/stars/titanwings/dsh-automation?style=social)](https://github.com/titanwings/dsh-automation/stargazers)
@@ -107,7 +107,7 @@ Run 会经历 `queued`、`running`，最终进入 `succeeded`、`failed`、`skip
 把 GitHub bundle 安装进 DSH Web profile，然后重启 `dsh web`：
 
 ```bash
-dsh plugin --profile web add github:titanwings/dsh-automation#v0.1.1
+dsh plugin --profile web add github:titanwings/dsh-automation#v0.1.2
 ```
 
 版本 tag 可以保证可重复部署；使用已经审阅的 commit SHA 也可以。如果你从 DSH 源码目录运行，请用 `pnpm dsh` 代替 `dsh`。
@@ -129,7 +129,8 @@ cd /path/to/deepseek-harness
 pnpm dsh plugin --profile web add /absolute/path/to/dsh-automation
 ```
 
-Git 插件安装会运行包的 `prepare` script。如果启用了 pnpm build-script 限制，请只允许你已经审阅过的 `@dsh-external/dsh-automation` 执行构建。
+仓库已随附构建完成的 Host 与 Web bundle。通过 Git 安装时不会运行包构建脚本，
+也不需要添加 `allowBuilds`。
 
 </details>
 
