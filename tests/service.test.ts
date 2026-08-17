@@ -56,6 +56,7 @@ const defaults: AutomationConfig = {
   runTimeoutMs: 60_000,
   misfireGraceMs: 15 * 60_000,
   historyLimit: 200,
+  archiveRunSessions: false,
 }
 
 function storedDefinition(now: string): AutomationDefinition {
@@ -76,11 +77,15 @@ async function harness(seed?: {
   readonly definitions?: readonly AutomationDefinition[]
   readonly runs?: readonly AutomationRun[]
   readonly config?: Partial<AutomationConfig>
+  readonly completeRuns?: boolean
+  readonly rejectArchive?: boolean
   readonly resolveWorkspaceGate?: Promise<void>
   readonly onResolveWorkspace?: () => void
 }): Promise<{
   service: AutomationService
   domain: MemoryDomain
+  archivedSessionIds: string[]
+  warnings: string[]
   removeSourceAgent(): void
 }> {
   const domain = new MemoryDomain(seed?.definitions, seed?.runs)
@@ -111,9 +116,29 @@ async function harness(seed?: {
     },
   }
   let liveSourceAgent: typeof sourceAgent | undefined = sourceAgent
+  const archivedSessionIds: string[] = []
+  const warnings: string[] = []
+  const runSession = {
+    seq: 0,
+    events: [] as Array<{ seq: number; type: string; data: Record<string, unknown> }>,
+  }
+  const runAgent = {
+    session: runSession,
+    whenIdle: async () => {},
+    followup: () => {
+      runSession.events.push(
+        { seq: 0, type: 'turn/start', data: {} },
+        { seq: 1, type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'completed result' }] } } },
+        { seq: 2, type: 'turn/end', data: { reason: { kind: 'completed' } } },
+      )
+      runSession.seq = 3
+    },
+    cancel: () => {},
+  }
   const ctx = {
     storageDomain: { open: async () => domain },
     workspaceRegistry: {
+      get archivedSessionIds() { return archivedSessionIds },
       resolveByPath: async (path: string) => {
         seed?.onResolveWorkspace?.()
         await seed?.resolveWorkspaceGate
@@ -122,6 +147,10 @@ async function harness(seed?: {
         return undefined
       },
       get: () => workspace,
+      archiveSession: async (sessionId: string) => {
+        if (seed?.rejectArchive) throw new Error('archive unavailable')
+        if (!archivedSessionIds.includes(sessionId)) archivedSessionIds.push(sessionId)
+      },
     },
     agents: {
       get: (id: string) => {
@@ -130,7 +159,11 @@ async function harness(seed?: {
         return undefined
       },
       withoutInitiator: (task: () => unknown) => task(),
-      create: async () => { throw new Error('executor is not expected in service unit tests') },
+      create: async (input: { setup: (ctx: unknown) => Promise<void> }) => {
+        if (!seed?.completeRuns) throw new Error('executor is not expected in service unit tests')
+        await input.setup({ agent: runAgent, tools: { guard: () => {} } })
+        return { agent: runAgent, dispose: async () => {} }
+      },
     },
     agentDefaultModel: { currentSelection: () => ({ provider: 'provider', model: 'model' }) },
     agentPresets: {
@@ -138,12 +171,14 @@ async function harness(seed?: {
       composedPreset: () => 'code',
     },
     sessions: { flush: async () => true },
-    logger: { warn: () => {} },
+    logger: { warn: (message: string) => { warnings.push(message) } },
   }
   const service = await AutomationService.open(ctx as never, { ...defaults, ...seed?.config })
   return {
     service,
     domain,
+    archivedSessionIds,
+    warnings,
     removeSourceAgent: () => { liveSourceAgent = undefined },
   }
 }
@@ -215,6 +250,31 @@ test('one update that changes fields and status advances the definition revision
   assert.equal(paused.revision, definition.revision + 1)
   assert.equal(paused.name, 'Paused health report')
   assert.equal(paused.status, 'paused')
+  await service.dispose()
+})
+
+test('a stale Web edit cannot overwrite a newer automation revision', async () => {
+  const { service } = await harness()
+  const definition = await service.create(scope, {
+    name: 'Editable report',
+    prompt: 'Inspect repository health.',
+    schedule: { kind: 'daily', time: '09:00', timeZone: 'UTC' },
+  })
+  await service.update(scope, definition.id, {
+    expectedRevision: definition.revision,
+    prompt: 'Inspect repository health and cite files.',
+  })
+
+  await assert.rejects(
+    () => service.update(scope, definition.id, {
+      expectedRevision: definition.revision,
+      name: 'Stale browser draft',
+    }),
+    /changed since it was opened/,
+  )
+  const current = (await service.snapshot(scope)).definitions[0]!
+  assert.equal(current.name, 'Editable report')
+  assert.match(current.prompt, /cite files/)
   await service.dispose()
 })
 
@@ -410,6 +470,117 @@ test('opening after a host stop terminalizes queued work without rerunning it', 
   assert.equal(recovered.unread, true)
   await service.dispose()
   assert.equal(domain.closed, true)
+})
+
+test('startup recovery archives an interrupted run Session after terminalizing its audit row', async () => {
+  const definition = storedDefinition('2026-08-13T00:00:00Z')
+  const interrupted: AutomationRun = {
+    ...createManualRun(definition, '2026-08-13T00:05:00Z', 'interrupted-session'),
+    status: 'running',
+    sessionId: 'dsh-automation-session-interrupted',
+    startedAt: '2026-08-13T00:05:30Z',
+  }
+  const { service, domain, archivedSessionIds } = await harness({
+    definitions: [definition],
+    runs: [interrupted],
+    config: { archiveRunSessions: true },
+  })
+  try {
+    assert.equal(domain.runs.get(interrupted.id)?.status, 'failed')
+    assert.equal(domain.runs.get(interrupted.id)?.error?.code, 'host_interrupted')
+    assert.deepEqual(archivedSessionIds, [interrupted.sessionId])
+  } finally {
+    await service.dispose()
+  }
+})
+
+test('configured run-session archival hides a completed Session without deleting its audit row', async () => {
+  const { service, domain, archivedSessionIds } = await harness({
+    completeRuns: true,
+    config: { maxConcurrentRuns: 1, archiveRunSessions: true },
+  })
+  try {
+    const definition = await service.create(scope, {
+      name: 'Archived result',
+      prompt: 'Return one bounded result.',
+      schedule: { kind: 'daily', time: '09:00', timeZone: 'UTC' },
+    })
+    const queued = await service.runNow(scope, definition.id)
+
+    service.start()
+    await waitFor(() => domain.runs.get(queued.id)?.status === 'succeeded')
+    const completed = domain.runs.get(queued.id)!
+    assert.equal(completed.summary, 'completed result')
+    assert.match(completed.sessionId ?? '', /^dsh-automation-session-/)
+    assert.deepEqual(archivedSessionIds, [completed.sessionId])
+    assert.equal((await service.snapshot(scope)).runs[0]?.sessionArchived, true)
+  } finally {
+    await service.dispose()
+  }
+})
+
+test('archive failure leaves the completed result successful and visible for retry after restart', async () => {
+  const { service, domain, archivedSessionIds, warnings } = await harness({
+    completeRuns: true,
+    rejectArchive: true,
+    config: { maxConcurrentRuns: 1, archiveRunSessions: true },
+  })
+  let definition: AutomationDefinition | undefined
+  let completed: AutomationRun | undefined
+  try {
+    definition = await service.create(scope, {
+      name: 'Archive retry',
+      prompt: 'Return one bounded result.',
+      schedule: { kind: 'daily', time: '09:00', timeZone: 'UTC' },
+    })
+    const queued = await service.runNow(scope, definition.id)
+
+    service.start()
+    await waitFor(() => domain.runs.get(queued.id)?.status === 'succeeded')
+    completed = domain.runs.get(queued.id)!
+    assert.equal(completed.status, 'succeeded')
+    assert.deepEqual(archivedSessionIds, [])
+    assert.equal(warnings.some(message => message.includes('could not archive')), true)
+    assert.equal((await service.snapshot(scope)).runs[0]?.sessionArchived, false)
+  } finally {
+    await service.dispose()
+  }
+  assert.ok(definition)
+  assert.ok(completed)
+
+  const retry = await harness({
+    definitions: [definition],
+    runs: [completed],
+    config: { archiveRunSessions: true },
+  })
+  try {
+    assert.deepEqual(retry.archivedSessionIds, [completed.sessionId])
+    assert.equal(retry.domain.runs.get(completed.id)?.status, 'succeeded')
+  } finally {
+    await retry.service.dispose()
+  }
+})
+
+test('archiveRunSessions false keeps completed Sessions in the ordinary list', async () => {
+  const { service, domain, archivedSessionIds } = await harness({
+    completeRuns: true,
+    config: { maxConcurrentRuns: 1, archiveRunSessions: false },
+  })
+  try {
+    const definition = await service.create(scope, {
+      name: 'Visible result',
+      prompt: 'Return one bounded result.',
+      schedule: { kind: 'daily', time: '09:00', timeZone: 'UTC' },
+    })
+    const queued = await service.runNow(scope, definition.id)
+
+    service.start()
+    await waitFor(() => domain.runs.get(queued.id)?.status === 'succeeded')
+    assert.deepEqual(archivedSessionIds, [])
+    assert.equal((await service.snapshot(scope)).runs[0]?.sessionArchived, false)
+  } finally {
+    await service.dispose()
+  }
 })
 
 test('durable retention is bounded per automation and keeps automation session identity', async () => {

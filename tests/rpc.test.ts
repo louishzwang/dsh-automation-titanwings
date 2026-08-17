@@ -2,6 +2,50 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { registerAutomationRpc } from '../src/rpc.ts'
 
+test('snapshot marks archived run Sessions so the client never offers a broken open action', async () => {
+  let handler: ((endpoint: string, payload: unknown, signal: AbortSignal) => Promise<unknown>) | undefined
+  const ctx = {
+    connection: { rpc: { handle: (_channel: string, value: typeof handler) => { handler = value; return async () => {} } } },
+  }
+  const service = {
+    snapshot: async () => ({
+      generatedAt: '2026-08-17T00:00:00.000Z',
+      workspace: { id: 'workspace-1', title: 'Repository', path: '/workspace/repo' },
+      definitions: [],
+      runs: [{
+        id: 'run-archived', automationId: 'automation-deleted', definitionRevision: 1,
+        occurrenceKey: 'manual:automation-deleted:archived', trigger: 'manual',
+        scheduledFor: '2026-08-17T00:00:00.000Z', status: 'succeeded',
+        promptSnapshot: 'Inspect one condition.', targetSnapshot: {
+          workspaceId: 'workspace-1', cwd: '/workspace/repo', agentPreset: 'code',
+          provider: null, model: null, permissionPreset: 'read-only',
+        },
+        sessionId: 'dsh-automation-session-archived', sessionArchived: true,
+        startedAt: '2026-08-17T00:00:01.000Z', finishedAt: '2026-08-17T00:00:02.000Z',
+        summary: 'No regression found.', error: null, unread: false,
+      }],
+    }),
+  }
+  registerAutomationRpc(ctx as never, service as never)
+
+  const response = await handler?.('snapshot', { sessionId: 'session-source' }, new AbortController().signal)
+  assert.deepEqual(response, {
+    ok: true,
+    value: {
+      scope: { workspaceId: 'workspace-1', workspaceName: 'Repository', cwd: '/workspace/repo' },
+      automations: [],
+      runs: [{
+        id: 'run-archived', automationId: 'automation-deleted', automationName: 'Deleted automation',
+        status: 'succeeded', trigger: 'manual', scheduledFor: '2026-08-17T00:00:00.000Z',
+        startedAt: '2026-08-17T00:00:01.000Z', finishedAt: '2026-08-17T00:00:02.000Z',
+        sessionId: 'dsh-automation-session-archived', sessionArchived: true,
+        summary: 'No regression found.', unread: false,
+      }],
+      serverNow: '2026-08-17T00:00:00.000Z',
+    },
+  })
+})
+
 test('mark-read RPC is loopback-only and propagates scoped service calls and cancellation', async () => {
   let handler: ((endpoint: string, payload: unknown, signal: AbortSignal) => Promise<unknown>) | undefined
   let removed = false
@@ -84,4 +128,46 @@ test('RPC schedule inputs are strict JSON contracts and do not coerce strings or
   assert.equal(weekly.ok, false)
   assert.equal(weekly.error?.code, 'bad-request')
   assert.equal(createCalls, 0)
+})
+
+test('update RPC replaces editable fields behind an expected revision guard', async () => {
+  let handler: ((endpoint: string, payload: unknown, signal: AbortSignal) => Promise<unknown>) | undefined
+  const calls: Array<{ scope: unknown; id: string; input: unknown; signal: AbortSignal | undefined }> = []
+  const ctx = {
+    connection: { rpc: { handle: (_channel: string, value: typeof handler) => { handler = value; return async () => {} } } },
+  }
+  const service = {
+    update: async (scope: unknown, id: string, input: unknown, signal?: AbortSignal) => {
+      calls.push({ scope, id, input, signal })
+      return { id, revision: 4 }
+    },
+  }
+  registerAutomationRpc(ctx as never, service as never)
+  const signal = new AbortController().signal
+  const response = await handler?.('update', {
+    sessionId: 'session-source',
+    automationId: 'automation-edit',
+    expectedRevision: 3,
+    input: {
+      name: 'Edited task',
+      prompt: 'The complete edited prompt.',
+      schedule: { kind: 'weekly', time: '09:15', weekdays: [1, 5] },
+      timeZone: 'Asia/Shanghai',
+      permission: 'workspace-write',
+    },
+  }, signal)
+
+  assert.deepEqual(response, { ok: true, value: { id: 'automation-edit', revision: 4 } })
+  assert.deepEqual(calls, [{
+    scope: { sessionId: 'session-source', creatorKind: 'web' },
+    id: 'automation-edit',
+    input: {
+      expectedRevision: 3,
+      name: 'Edited task',
+      prompt: 'The complete edited prompt.',
+      schedule: { kind: 'weekly', time: '09:15', weekdays: ['MO', 'FR'], timeZone: 'Asia/Shanghai' },
+      permissionPreset: 'workspace-write',
+    },
+    signal,
+  }])
 })

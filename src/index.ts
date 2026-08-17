@@ -18,6 +18,7 @@ export interface Config {
   readonly runTimeoutMinutes?: number
   readonly misfireGraceMinutes?: number
   readonly historyLimit?: number
+  readonly archiveRunSessions?: boolean
 }
 
 export const Config = z.object({
@@ -25,6 +26,7 @@ export const Config = z.object({
   runTimeoutMinutes: z.number().step(1).min(1).max(1_440).default(60),
   misfireGraceMinutes: z.number().step(1).min(0).max(10_080).default(15),
   historyLimit: z.number().step(1).min(1).max(5_000).default(200),
+  archiveRunSessions: z.boolean().default(false),
 })
 
 const MUTATING_TOOLS = new Set([
@@ -59,6 +61,7 @@ export async function apply(ctx: Context, rawConfig: Config): Promise<void> {
       runTimeoutMs: config.runTimeoutMinutes * 60_000,
       misfireGraceMs: config.misfireGraceMinutes * 60_000,
       historyLimit: config.historyLimit,
+      archiveRunSessions: config.archiveRunSessions,
     })
     const agentTools = new Map<object, () => void | Promise<void>>()
     let cleaned = false

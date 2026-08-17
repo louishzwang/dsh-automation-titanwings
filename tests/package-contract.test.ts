@@ -45,6 +45,7 @@ test('package keeps the installable DSH bundle and Web client contract', async (
   assert.match(patch, /^\s*- insert:\s*$/m)
   assert.match(patch, /^\s*- id: dsh-automation\s*$/m)
   assert.match(patch, /^\s*name: ['"]@dsh-external\/dsh-automation['"]\s*$/m)
+  assert.match(patch, /^\s*archiveRunSessions: false\s*$/m)
 
   await Promise.all([
     access(new URL('lib/index.js', root)),
@@ -55,4 +56,7 @@ test('package keeps the installable DSH bundle and Web client contract', async (
   const clientBundle = await readFile(new URL('lib/client.js', root), 'utf8')
   assert.match(clientBundle, /window\.__ModuleLoader__\.load\(/)
   assert.match(clientBundle, /@dsh-external\/dsh-automation/)
+  assert.match(clientBundle, /sessionArchived/)
+  const hostBundle = await readFile(new URL('lib/index.js', root), 'utf8')
+  assert.match(hostBundle, /archiveRunSessions: .*\.boolean\(\)\.default\(false\)/)
 })

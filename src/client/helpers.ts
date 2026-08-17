@@ -4,7 +4,9 @@ import type {
   AutomationSchedule,
   AutomationRunStatus,
   AutomationSnapshot,
+  AutomationViewModel,
   CreateAutomationInput,
+  UpdateAutomationInput,
 } from './protocol.js'
 
 export type ScheduleKind = 'once' | 'interval' | 'daily' | 'weekly'
@@ -15,6 +17,7 @@ export interface AutomationFormState {
   readonly scheduleKind: ScheduleKind
   readonly onceAt: string
   readonly everyMinutes: string
+  readonly intervalAnchor?: string
   readonly time: string
   readonly weekdays: readonly number[]
   readonly timeZone: string
@@ -55,6 +58,33 @@ export function defaultFormState(now = new Date()): AutomationFormState {
   }
 }
 
+function exactLocalDateTimeValue(iso: string): string {
+  const date = new Date(iso)
+  const offset = date.getTimezoneOffset() * 60_000
+  return new Date(date.getTime() - offset).toISOString().slice(0, 16)
+}
+
+/** Build an editable draft from the complete durable definition, not its card preview. */
+export function formStateFromAutomation(automation: AutomationViewModel): AutomationFormState {
+  const defaults = defaultFormState()
+  const schedule = automation.schedule
+  return {
+    ...defaults,
+    name: automation.name,
+    prompt: automation.prompt,
+    scheduleKind: schedule.kind,
+    onceAt: schedule.kind === 'once' ? exactLocalDateTimeValue(schedule.at) : defaults.onceAt,
+    everyMinutes: schedule.kind === 'interval' ? String(schedule.everyMinutes) : defaults.everyMinutes,
+    ...(schedule.kind === 'interval' && schedule.anchor !== undefined
+      ? { intervalAnchor: schedule.anchor }
+      : {}),
+    time: schedule.kind === 'daily' || schedule.kind === 'weekly' ? schedule.time : defaults.time,
+    weekdays: schedule.kind === 'weekly' ? [...schedule.weekdays] : defaults.weekdays,
+    timeZone: automation.timeZone,
+    permission: automation.permission,
+  }
+}
+
 export function buildCreateInput(form: AutomationFormState, now = new Date()): CreateAutomationInput {
   const name = form.name.trim()
   const prompt = form.prompt.trim()
@@ -76,7 +106,12 @@ export function buildCreateInput(form: AutomationFormState, now = new Date()): C
       if (!Number.isInteger(everyMinutes) || everyMinutes < 5 || everyMinutes > 43_200) {
         throw new AutomationFormError('form.error.interval')
       }
-      schedule = { kind: 'interval', everyMinutes, anchor: now.toISOString(), timeZone: form.timeZone }
+      schedule = {
+        kind: 'interval',
+        everyMinutes,
+        anchor: form.intervalAnchor ?? now.toISOString(),
+        timeZone: form.timeZone,
+      }
       break
     }
     case 'daily':
@@ -88,6 +123,47 @@ export function buildCreateInput(form: AutomationFormState, now = new Date()): C
       break
   }
   return { name, prompt, schedule, timeZone: form.timeZone, permission: form.permission }
+}
+
+function scheduleMatchesDraft(form: AutomationFormState, automation: AutomationViewModel): boolean {
+  const schedule = automation.schedule
+  if (form.scheduleKind !== schedule.kind || form.timeZone !== automation.timeZone) return false
+  switch (schedule.kind) {
+    case 'once':
+      return form.onceAt === exactLocalDateTimeValue(schedule.at)
+    case 'interval':
+      return form.everyMinutes === String(schedule.everyMinutes)
+        && form.intervalAnchor === schedule.anchor
+    case 'daily':
+      return form.time === schedule.time
+    case 'weekly':
+      return form.time === schedule.time
+        && [...form.weekdays].sort((a, b) => a - b).join(',') === [...schedule.weekdays].sort((a, b) => a - b).join(',')
+  }
+}
+
+/** Return only changed fields so editing a completed one-shot does not resubmit its past schedule. */
+export function buildUpdateInput(
+  form: AutomationFormState,
+  automation: AutomationViewModel,
+  now = new Date(),
+): UpdateAutomationInput {
+  const name = form.name.trim()
+  const prompt = form.prompt.trim()
+  if (name === '') throw new AutomationFormError('form.error.name')
+  if (prompt === '') throw new AutomationFormError('form.error.prompt')
+
+  const scheduleChanged = !scheduleMatchesDraft(form, automation)
+  const replacement = scheduleChanged ? buildCreateInput(form, now) : undefined
+  return {
+    ...(name === automation.name ? {} : { name }),
+    ...(prompt === automation.prompt ? {} : { prompt }),
+    ...(replacement === undefined ? {} : {
+      schedule: replacement.schedule,
+      timeZone: replacement.timeZone,
+    }),
+    ...(form.permission === automation.permission ? {} : { permission: form.permission }),
+  }
 }
 
 const ATTENTION_STATUSES = new Set<AutomationRunStatus>(['failed', 'interrupted'])

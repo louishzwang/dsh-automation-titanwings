@@ -46,6 +46,7 @@ export interface AutomationRunViewModel {
   readonly startedAt?: string
   readonly finishedAt?: string
   readonly sessionId?: string
+  readonly sessionArchived: boolean
   readonly summary?: string
   readonly error?: string
   readonly unread?: boolean
@@ -70,6 +71,14 @@ export interface CreateAutomationInput {
   readonly permission: AutomationPermission
 }
 
+export interface UpdateAutomationInput {
+  readonly name?: string
+  readonly prompt?: string
+  readonly schedule?: AutomationSchedule
+  readonly timeZone?: string
+  readonly permission?: AutomationPermission
+}
+
 export interface SnapshotRequest {
   readonly sessionId: string
 }
@@ -77,6 +86,13 @@ export interface SnapshotRequest {
 export interface CreateRequest {
   readonly sessionId: string
   readonly input: CreateAutomationInput
+}
+
+export interface UpdateRequest {
+  readonly sessionId: string
+  readonly automationId: string
+  readonly expectedRevision: number
+  readonly input: UpdateAutomationInput
 }
 
 export interface MutateRequest {
