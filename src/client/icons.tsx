@@ -34,6 +34,10 @@ export function TrashIcon(props: IconProps): JSX.Element {
   return <IconFrame {...props}><path d="M5.5 7.5h13M9 7.5V5.7h6v1.8M8 10.5l.5 7h7l.5-7" /></IconFrame>
 }
 
+export function PencilIcon(props: IconProps): JSX.Element {
+  return <IconFrame {...props}><path d="m5 16.5-.7 3.2 3.2-.7L18 8.5 15.5 6 5 16.5Z" /><path d="m13.8 7.7 2.5 2.5" /></IconFrame>
+}
+
 export function ShieldIcon(props: IconProps): JSX.Element {
   return <IconFrame {...props}><path d="M12 3.8 19 6v5.1c0 4.3-2.6 7.4-7 9.1-4.4-1.7-7-4.8-7-9.1V6l7-2.2Z" /><path d="m9.4 12 1.7 1.7 3.7-4" /></IconFrame>
 }

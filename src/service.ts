@@ -33,6 +33,7 @@ export interface AutomationConfig {
   readonly runTimeoutMs: number
   readonly misfireGraceMs: number
   readonly historyLimit: number
+  readonly archiveRunSessions: boolean
 }
 
 export interface CreateRequest {
@@ -51,12 +52,16 @@ export interface AutomationSnapshot {
   readonly generatedAt: string
   readonly workspace: { readonly id: string; readonly title: string; readonly path: string }
   readonly definitions: readonly AutomationDefinitionView[]
-  readonly runs: readonly AutomationRun[]
+  readonly runs: readonly AutomationRunView[]
 }
 
 export interface AutomationDefinitionView extends AutomationDefinition {
   readonly nextRunAt: string | null
   readonly lastRun: AutomationRun | null
+}
+
+export interface AutomationRunView extends AutomationRun {
+  readonly sessionArchived: boolean
 }
 
 interface SessionEventLike {
@@ -106,6 +111,7 @@ export class AutomationService {
       service.definitions = domain.table('definitions') as KvTable<string, AutomationDefinition>
       service.runs = domain.table('runs') as KvTable<string, AutomationRun>
       await service.recoverInterruptedRuns()
+      await service.archiveTerminalRunSessions()
       await service.pruneAllHistory()
       return service
     } catch (error) {
@@ -162,7 +168,11 @@ export class AutomationService {
         .map(([, run]) => run)
         .filter(run => run.targetSnapshot.workspaceId === resolved.workspace.id)
         .sort(compareRuns)
-      const runs = workspaceRuns.slice(0, this.config.historyLimit)
+      const archivedSessionIds = new Set(this.ctx.workspaceRegistry.archivedSessionIds.map(String))
+      const runs = workspaceRuns.slice(0, this.config.historyLimit).map((run): AutomationRunView => ({
+        ...run,
+        sessionArchived: run.sessionId !== null && archivedSessionIds.has(run.sessionId),
+      }))
       const generatedAt = toIso()
       return {
         generatedAt,
@@ -214,14 +224,20 @@ export class AutomationService {
   async update(
     scope: AutomationScope,
     id: string,
-    input: Omit<UpdateAutomationInput, 'now'> & { readonly status?: 'active' | 'paused' },
+    input: Omit<UpdateAutomationInput, 'now'> & {
+      readonly status?: 'active' | 'paused'
+      readonly expectedRevision?: number
+    },
     signal?: AbortSignal,
   ): Promise<AutomationDefinition> {
     const next = await this.serialize(async () => {
       const current = await this.ownedDefinition(scope, id)
       throwIfCancelled(signal)
       const now = toIso()
-      const { status, ...fields } = input
+      const { status, expectedRevision, ...fields } = input
+      if (expectedRevision !== undefined && current.revision !== expectedRevision) {
+        throw new Error('The automation changed since it was opened. Close and reopen the editor before saving again.')
+      }
       if (fields.schedule?.kind === 'once' && nextOccurrence(fields.schedule, now) === null) {
         throw new Error('A one-time automation must be scheduled in the future.')
       }
@@ -399,13 +415,15 @@ export class AutomationService {
         try {
           const current = this.runs.get(run.id)
           if (current !== undefined && (current.status === 'queued' || current.status === 'running')) {
-            await this.runs.put(run.id, {
+            const failed: AutomationRun = {
               ...current,
               status: 'failed',
               finishedAt: toIso(),
               error: { code: 'persistence_error', message: 'The run could not persist its execution state.' },
               unread: true,
-            })
+            }
+            await this.runs.put(run.id, failed)
+            await this.archiveRunSession(failed)
             await this.pruneWorkspaceHistory(current.targetSnapshot.workspaceId)
           }
         } catch (recordError: unknown) {
@@ -444,7 +462,7 @@ export class AutomationService {
       signal,
     })
     const finishedAt = toIso()
-    await this.runs.put(run.id, {
+    const completed: AutomationRun = {
       ...running,
       status: completion.status,
       sessionId: completion.sessionId ?? null,
@@ -452,7 +470,9 @@ export class AutomationService {
       summary: completion.summary ?? null,
       error: completion.error ?? null,
       unread: true,
-    })
+    }
+    await this.runs.put(run.id, completed)
+    await this.archiveRunSession(completed)
     await this.pruneWorkspaceHistory(run.targetSnapshot.workspaceId)
   }
 
@@ -516,6 +536,22 @@ export class AutomationService {
         unread: true,
       })
     }
+  }
+
+  /** Archive terminal run Sessions without changing their durable run result. */
+  private async archiveRunSession(run: AutomationRun): Promise<void> {
+    if (!this.config.archiveRunSessions || run.sessionId === null
+      || run.status === 'queued' || run.status === 'running') return
+    try {
+      await this.ctx.workspaceRegistry.archiveSession(SessionId(run.sessionId))
+    } catch (error: unknown) {
+      this.ctx.logger.warn(`dsh-automation: could not archive Session '${run.sessionId}': ${asMessage(error)}`)
+    }
+  }
+
+  /** Retry terminal Session archival on startup before bounded run pruning. */
+  private async archiveTerminalRunSessions(): Promise<void> {
+    for (const [, run] of this.runs.entries()) await this.archiveRunSession(run)
   }
 
   /** Keep every active record plus the configured newest terminal records per automation. */

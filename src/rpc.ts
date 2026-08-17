@@ -38,6 +38,12 @@ function integer(value: unknown, label: string): number {
   return value
 }
 
+function positiveInteger(value: unknown, label: string): number {
+  const result = integer(value, label)
+  if (result < 1) throw new Error(`${label} must be a positive integer`)
+  return result
+}
+
 function toDomainSchedule(raw: unknown, timeZone: string): DomainSchedule {
   const schedule = record(raw, 'schedule')
   const kind = string(schedule.kind, 'schedule.kind')
@@ -89,7 +95,7 @@ function errorResult(
     }
   }
   const message = error instanceof Error ? error.message : String(error)
-  const badRequest = /must|required|unknown automation|another workspace|scheduled in the future|already has a queued or running run|not registered|requires a live source session|has no workspace|request was cancelled/.test(message)
+  const badRequest = /must|required|unknown automation|another workspace|scheduled in the future|already has a queued or running run|not registered|requires a live source session|has no workspace|request was cancelled|changed since it was opened/.test(message)
   return {
     ok: false,
     error: {
@@ -142,6 +148,7 @@ async function snapshotValue(service: AutomationService, payload: Record<string,
       ...(run.startedAt === null ? {} : { startedAt: run.startedAt }),
       ...(run.finishedAt === null ? {} : { finishedAt: run.finishedAt }),
       ...(run.sessionId === null ? {} : { sessionId: run.sessionId }),
+      sessionArchived: run.sessionArchived,
       ...(run.summary === null ? {} : { summary: run.summary }),
       ...(run.error === null ? {} : { error: run.error.message }),
       unread: run.unread,
@@ -173,6 +180,36 @@ export function registerAutomationRpc(ctx: RpcContext, service: AutomationServic
             permissionPreset: permission,
           }, signal)
           return { ok: true, value: { id: value.id, revision: value.revision } }
+        }
+        case 'update': {
+          const id = string(payload.automationId, 'automationId')
+          const input = record(payload.input, 'input')
+          const value: {
+            expectedRevision: number
+            name?: string
+            prompt?: string
+            schedule?: DomainSchedule
+            permissionPreset?: 'read-only' | 'workspace-write'
+          } = {
+            expectedRevision: positiveInteger(payload.expectedRevision, 'expectedRevision'),
+          }
+          if (input.name !== undefined) value.name = string(input.name, 'input.name')
+          if (input.prompt !== undefined) value.prompt = string(input.prompt, 'input.prompt')
+          if (input.schedule !== undefined) {
+            const timeZone = string(input.timeZone, 'input.timeZone')
+            value.schedule = toDomainSchedule(input.schedule, timeZone)
+          } else if (input.timeZone !== undefined) {
+            throw new Error('input.timeZone requires input.schedule')
+          }
+          if (input.permission !== undefined) {
+            const permission = string(input.permission, 'input.permission')
+            if (permission !== 'read-only' && permission !== 'workspace-write') {
+              throw new Error('input.permission must be read-only or workspace-write')
+            }
+            value.permissionPreset = permission
+          }
+          const updated = await service.update(scopeOf(payload), id, value, signal)
+          return { ok: true, value: { id: updated.id, revision: updated.revision } }
         }
         case 'mutate': {
           const id = string(payload.automationId, 'automationId')

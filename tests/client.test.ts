@@ -3,12 +3,15 @@ import test from 'node:test'
 import {
   AutomationFormError,
   buildCreateInput,
+  buildUpdateInput,
   defaultFormState,
   deriveOverview,
+  formStateFromAutomation,
   formatRelativeTime,
   formatSchedule,
 } from '../src/client/helpers.js'
 import { en, zh } from '../src/client/locales.js'
+import { RecentRun } from '../src/client/AutomationView.js'
 import { createAutomationRuntime } from '../src/client/runtime.js'
 import type { AutomationSnapshot } from '../src/client/protocol.js'
 
@@ -64,6 +67,62 @@ test('buildCreateInput rejects empty weekly days and unsafe intervals', () => {
   )
 })
 
+test('editing starts from the complete stored prompt and preserves interval cadence', () => {
+  const automation: AutomationSnapshot['automations'][number] = {
+    id: 'automation-edit',
+    revision: 7,
+    name: 'Repository health',
+    prompt: 'Inspect every package.\n\nReturn the complete evidence, including exact file paths and commands.',
+    status: 'active',
+    schedule: {
+      kind: 'interval',
+      everyMinutes: 45,
+      anchor: '2026-08-13T00:15:00.000Z',
+      timeZone: 'Asia/Shanghai',
+    },
+    scheduleSummary: 'Every 45 minutes',
+    timeZone: 'Asia/Shanghai',
+    permission: 'workspace-write',
+    createdAt: '2026-08-12T00:00:00.000Z',
+    updatedAt: '2026-08-13T00:00:00.000Z',
+  }
+
+  const form = formStateFromAutomation(automation)
+  assert.equal(form.prompt, automation.prompt)
+  assert.equal(form.intervalAnchor, '2026-08-13T00:15:00.000Z')
+  assert.deepEqual(buildCreateInput(form), {
+    name: 'Repository health',
+    prompt: automation.prompt,
+    schedule: {
+      kind: 'interval',
+      everyMinutes: 45,
+      anchor: '2026-08-13T00:15:00.000Z',
+      timeZone: 'Asia/Shanghai',
+    },
+    timeZone: 'Asia/Shanghai',
+    permission: 'workspace-write',
+  })
+  assert.deepEqual(buildUpdateInput({ ...form, prompt: `${form.prompt}\nAdd a short risk summary.` }, automation), {
+    prompt: `${automation.prompt}\nAdd a short risk summary.`,
+  })
+})
+
+test('editing a completed one-shot can change its prompt without resubmitting a past schedule', () => {
+  const automation: AutomationSnapshot['automations'][number] = {
+    id: 'automation-once', revision: 2, name: 'Completed migration',
+    prompt: 'Summarize the migration.', status: 'paused',
+    schedule: { kind: 'once', at: '2026-08-12T08:00:00.000Z', timeZone: 'UTC' },
+    scheduleSummary: 'Once', timeZone: 'UTC', permission: 'read-only',
+    createdAt: '2026-08-11T00:00:00.000Z', updatedAt: '2026-08-12T08:00:00.000Z',
+  }
+  const form = formStateFromAutomation(automation)
+  assert.deepEqual(buildUpdateInput(
+    { ...form, prompt: 'Summarize the migration and include evidence.' },
+    automation,
+    new Date('2026-08-17T00:00:00.000Z'),
+  ), { prompt: 'Summarize the migration and include evidence.' })
+})
+
 test('deriveOverview counts active definitions and unread failures', () => {
   const snapshot: AutomationSnapshot = {
     scope: { cwd: '/workspace' },
@@ -83,9 +142,9 @@ test('deriveOverview counts active definitions and unread failures', () => {
       },
     ],
     runs: [
-      { id: 'r1', automationId: 'a1', automationName: 'A', status: 'failed', trigger: 'schedule', scheduledFor: '2026-08-12T09:00:00.000Z' },
-      { id: 'r2', automationId: 'a1', automationName: 'A', status: 'failed', trigger: 'schedule', scheduledFor: '2026-08-11T09:00:00.000Z', unread: false },
-      { id: 'r3', automationId: 'a2', automationName: 'B', status: 'succeeded', trigger: 'manual', scheduledFor: '2026-08-12T10:00:00.000Z' },
+      { id: 'r1', automationId: 'a1', automationName: 'A', status: 'failed', trigger: 'schedule', scheduledFor: '2026-08-12T09:00:00.000Z', sessionArchived: false },
+      { id: 'r2', automationId: 'a1', automationName: 'A', status: 'failed', trigger: 'schedule', scheduledFor: '2026-08-11T09:00:00.000Z', sessionArchived: false, unread: false },
+      { id: 'r3', automationId: 'a2', automationName: 'B', status: 'succeeded', trigger: 'manual', scheduledFor: '2026-08-12T10:00:00.000Z', sessionArchived: false },
     ],
   }
   assert.deepEqual(deriveOverview(snapshot), {
@@ -149,4 +208,70 @@ test('opening a run Session marks it read only after navigation succeeds', async
   await runtime.markRunRead('run-without-session')
   assert.deepEqual(calls.map(call => call.endpoint), ['mark-read', 'snapshot'])
   assert.deepEqual(calls[0]?.payload, { sessionId: 'session-source', runId: 'run-without-session' })
+})
+
+test('an archived run labels its Session without rendering a broken open button', () => {
+  type RenderedChild = {
+    readonly type?: unknown
+    readonly props?: { readonly className?: string; readonly children?: unknown }
+  }
+  type RenderedRun = { readonly props: { readonly children: readonly RenderedChild[] } }
+  const common = {
+    id: 'run-archived', automationId: 'automation-1', automationName: 'Archived result',
+    status: 'succeeded' as const, trigger: 'manual' as const,
+    scheduledFor: '2026-08-17T00:00:00.000Z', sessionId: 'dsh-automation-session-archived',
+  }
+  const archived = RecentRun({
+    run: { ...common, sessionArchived: true },
+    now: new Date('2026-08-17T00:00:01.000Z'), t, busy: false,
+    onOpen: () => { throw new Error('archived Session must not be opened') },
+    onMarkRead: () => {},
+  }) as unknown as RenderedRun
+  const archivedAction = archived.props.children.find(child => child?.props?.className?.includes('--archived'))
+  assert.equal(archivedAction?.type, 'span')
+  assert.match(String(archivedAction?.props?.children), /Session archived/)
+  assert.equal(archived.props.children.some(child => child?.type === 'button'
+    && child?.props?.className === 'dsh-automation-session-id'), false)
+
+  const visible = RecentRun({
+    run: { ...common, sessionArchived: false },
+    now: new Date('2026-08-17T00:00:01.000Z'), t, busy: false,
+    onOpen: () => {}, onMarkRead: () => {},
+  }) as unknown as RenderedRun
+  assert.equal(visible.props.children.some(child => child?.type === 'button'
+    && child?.props?.className === 'dsh-automation-session-id'), true)
+})
+
+test('editing sends a revision-guarded update and refreshes the snapshot', async () => {
+  const calls: Array<{ endpoint: string; payload: unknown }> = []
+  const rpc = {
+    call: async (_channel: string, endpoint: string, payload: unknown) => {
+      calls.push({ endpoint, payload })
+      if (endpoint === 'snapshot') {
+        return {
+          ok: true,
+          value: { scope: { cwd: '/workspace' }, automations: [], runs: [], serverNow: new Date().toISOString() },
+        }
+      }
+      return { ok: true, value: { id: 'automation-edit', revision: 8 } }
+    },
+  }
+  const runtime = createAutomationRuntime(rpc, 'session-source')
+  const input = {
+    name: 'Edited task',
+    prompt: 'Keep the complete edited prompt.',
+    schedule: { kind: 'daily' as const, time: '08:30', timeZone: 'UTC' },
+    timeZone: 'UTC',
+    permission: 'read-only' as const,
+  }
+
+  await runtime.updateAutomation('automation-edit', 7, input)
+
+  assert.deepEqual(calls.map(call => call.endpoint), ['update', 'snapshot'])
+  assert.deepEqual(calls[0]?.payload, {
+    sessionId: 'session-source',
+    automationId: 'automation-edit',
+    expectedRevision: 7,
+    input,
+  })
 })

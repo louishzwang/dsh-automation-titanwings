@@ -32,6 +32,7 @@ export function apply(ctx: ClientContext): void {
         hooks: { automationState: runtime.source },
         refresh: runtime.refresh,
         createAutomation: runtime.createAutomation,
+        updateAutomation: runtime.updateAutomation,
         mutateAutomation: runtime.mutateAutomation,
         runNow: runtime.runNow,
         markRunRead: runtime.markRunRead,

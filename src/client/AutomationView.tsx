@@ -3,10 +3,12 @@ import type { AutomationViewProps, Translate } from './contracts.js'
 import {
   AutomationFormError,
   buildCreateInput,
+  buildUpdateInput,
   defaultFormState,
   deriveOverview,
   formatSchedule,
   formatRelativeTime,
+  formStateFromAutomation,
   shortSessionId,
   type AutomationFormState,
   type ScheduleKind,
@@ -17,6 +19,7 @@ import {
   CalendarIcon,
   CheckIcon,
   PauseIcon,
+  PencilIcon,
   PlayIcon,
   PlusIcon,
   RefreshIcon,
@@ -27,12 +30,14 @@ import type {
   AutomationRunStatus,
   AutomationRunViewModel,
   AutomationViewModel,
+  CreateAutomationInput,
+  UpdateAutomationInput,
 } from './protocol.js'
 
 const POLL_INTERVAL_MS = 15_000
 const WEEKDAYS = [1, 2, 3, 4, 5, 6, 7] as const
 
-type BusyAction = 'create' | 'pause' | 'resume' | 'run' | 'read' | 'delete'
+type BusyAction = 'create' | 'update' | 'pause' | 'resume' | 'run' | 'read' | 'delete'
 
 function actionKey(action: BusyAction, id = ''): string {
   return `${action}:${id}`
@@ -67,15 +72,26 @@ function RunStatusBadge({ status, t }: { status: AutomationRunStatus; t: Transla
   )
 }
 
-interface CreateFormProps {
+interface FormCommonProps {
   readonly t: Translate
   readonly busy: boolean
   readonly onCancel: () => void
-  readonly onSubmit: (input: ReturnType<typeof buildCreateInput>) => Promise<void>
 }
 
-function CreateAutomationForm({ t, busy, onCancel, onSubmit }: CreateFormProps): JSX.Element {
-  const [form, setForm] = useState<AutomationFormState>(() => defaultFormState())
+type AutomationFormProps = FormCommonProps & ({
+  readonly mode: 'create'
+  readonly onSubmit: (input: CreateAutomationInput) => Promise<void>
+} | {
+  readonly mode: 'edit'
+  readonly automation: AutomationViewModel
+  readonly onSubmit: (input: UpdateAutomationInput) => Promise<void>
+})
+
+function AutomationForm(props: AutomationFormProps): JSX.Element {
+  const { t, busy, onCancel } = props
+  const [form, setForm] = useState<AutomationFormState>(() => props.mode === 'create'
+    ? defaultFormState()
+    : formStateFromAutomation(props.automation))
   const [validationError, setValidationError] = useState<string>()
 
   const update = <Key extends keyof AutomationFormState>(key: Key, value: AutomationFormState[Key]): void => {
@@ -90,9 +106,12 @@ function CreateAutomationForm({ t, busy, onCancel, onSubmit }: CreateFormProps):
   const submit = (event: FormEvent): void => {
     event.preventDefault()
     try {
-      const input = buildCreateInput(form)
       setValidationError(undefined)
-      void onSubmit(input)
+      if (props.mode === 'create') {
+        void props.onSubmit(buildCreateInput(form))
+      } else {
+        void props.onSubmit(buildUpdateInput(form, props.automation))
+      }
     } catch (error) {
       if (error instanceof AutomationFormError) {
         setValidationError(t(error.key))
@@ -107,8 +126,8 @@ function CreateAutomationForm({ t, busy, onCancel, onSubmit }: CreateFormProps):
       <div className="dsh-automation-create-heading">
         <div>
           <span className="dsh-automation-kicker">{t('header.eyebrow')}</span>
-          <h2>{t('form.title')}</h2>
-          <p>{t('form.subtitle')}</p>
+          <h2>{t(props.mode === 'create' ? 'form.title' : 'form.editTitle')}</h2>
+          <p>{t(props.mode === 'create' ? 'form.subtitle' : 'form.editSubtitle')}</p>
         </div>
         <button className="dsh-automation-button dsh-automation-button--ghost" type="button" onClick={onCancel} disabled={busy}>
           {t('form.cancel')}
@@ -122,7 +141,7 @@ function CreateAutomationForm({ t, busy, onCancel, onSubmit }: CreateFormProps):
         </label>
         <label className="dsh-automation-field dsh-automation-field--wide">
           <span>{t('form.prompt')}</span>
-          <textarea value={form.prompt} maxLength={12_000} rows={4} placeholder={t('form.promptPlaceholder')} onChange={event => update('prompt', event.currentTarget.value)} />
+          <textarea value={form.prompt} maxLength={12_000} rows={props.mode === 'edit' ? 8 : 4} placeholder={t('form.promptPlaceholder')} onChange={event => update('prompt', event.currentTarget.value)} />
         </label>
 
         <fieldset className="dsh-automation-fieldset dsh-automation-field--wide">
@@ -201,8 +220,10 @@ function CreateAutomationForm({ t, busy, onCancel, onSubmit }: CreateFormProps):
       <div className="dsh-automation-form-footer">
         <span className="dsh-automation-form-error" role="alert">{validationError}</span>
         <button className="dsh-automation-button dsh-automation-button--primary" type="submit" disabled={busy}>
-          <PlusIcon />
-          {busy ? t('form.submitting') : t('form.submit')}
+          {props.mode === 'create' ? <PlusIcon /> : <PencilIcon />}
+          {busy
+            ? t(props.mode === 'create' ? 'form.submitting' : 'form.saving')
+            : t(props.mode === 'create' ? 'form.submit' : 'form.save')}
         </button>
       </div>
     </form>
@@ -216,12 +237,13 @@ interface AutomationCardProps {
   readonly busyKey: string | undefined
   readonly confirmingDelete: boolean
   readonly onConfirmDelete: (id?: string) => void
+  readonly onEdit: (automation: AutomationViewModel) => void
   readonly onMutate: (id: string, mutation: 'pause' | 'resume' | 'delete') => void
   readonly onRun: (id: string) => void
 }
 
 function AutomationCard(props: AutomationCardProps): JSX.Element {
-  const { automation, now, t, busyKey, confirmingDelete, onConfirmDelete, onMutate, onRun } = props
+  const { automation, now, t, busyKey, confirmingDelete, onConfirmDelete, onEdit, onMutate, onRun } = props
   const isBusy = busyKey?.endsWith(`:${automation.id}`) === true
   return (
     <article className="dsh-automation-card">
@@ -240,6 +262,10 @@ function AutomationCard(props: AutomationCardProps): JSX.Element {
       </div>
 
       <p className="dsh-automation-prompt">{automation.prompt}</p>
+      <details className="dsh-automation-prompt-details">
+        <summary>{t('card.viewPrompt')}</summary>
+        <pre>{automation.prompt}</pre>
+      </details>
       <div className="dsh-automation-schedule-line">
         <CalendarIcon />
         <strong>{formatSchedule(automation.schedule, t)}</strong>
@@ -270,6 +296,9 @@ function AutomationCard(props: AutomationCardProps): JSX.Element {
         </div>
       ) : (
         <div className="dsh-automation-card-actions">
+          <button className="dsh-automation-button dsh-automation-button--ghost" type="button" onClick={() => onEdit(automation)} disabled={isBusy}>
+            <PencilIcon />{t('card.edit')}
+          </button>
           <button className="dsh-automation-button dsh-automation-button--ghost" type="button" onClick={() => onRun(automation.id)} disabled={isBusy}>
             <PlayIcon />{t('card.runNow')}
           </button>
@@ -286,7 +315,7 @@ function AutomationCard(props: AutomationCardProps): JSX.Element {
   )
 }
 
-function RecentRun({ run, now, t, busy, onOpen, onMarkRead }: {
+export function RecentRun({ run, now, t, busy, onOpen, onMarkRead }: {
   run: AutomationRunViewModel
   now: Date
   t: Translate
@@ -311,7 +340,12 @@ function RecentRun({ run, now, t, busy, onOpen, onMarkRead }: {
       {(run.summary !== undefined || run.error !== undefined) && (
         <p className={run.error === undefined ? '' : 'is-error'}>{run.error ?? run.summary}</p>
       )}
-      {run.sessionId !== undefined && (
+      {run.sessionId !== undefined && run.sessionArchived && (
+        <span className="dsh-automation-session-id dsh-automation-session-id--archived" title={run.sessionId}>
+          {t('run.sessionArchived', { id: shortSessionId(run.sessionId) })}
+        </span>
+      )}
+      {run.sessionId !== undefined && !run.sessionArchived && (
         <button className="dsh-automation-session-id" type="button" onClick={() => onOpen(run.id, run.sessionId!)}>
           {t('run.openSession', { id: shortSessionId(run.sessionId) })}
         </button>
@@ -327,10 +361,11 @@ function RecentRun({ run, now, t, busy, onOpen, onMarkRead }: {
 
 /** Native conversation view: all data and effects arrive through the slot's four shares. */
 export function AutomationView({
-  t, useAutomationState, refresh, createAutomation, mutateAutomation, runNow, markRunRead, openSession,
+  t, useAutomationState, refresh, createAutomation, updateAutomation, mutateAutomation, runNow, markRunRead, openSession,
 }: AutomationViewProps): JSX.Element {
   const state = useAutomationState(value => value)
   const [showCreate, setShowCreate] = useState(false)
+  const [editingAutomation, setEditingAutomation] = useState<AutomationViewModel>()
   const [busyKey, setBusyKey] = useState<string>()
   const [actionError, setActionError] = useState<string>()
   const [confirmDeleteId, setConfirmDeleteId] = useState<string>()
@@ -359,7 +394,10 @@ export function AutomationView({
   const onMutate = (id: string, mutation: 'pause' | 'resume' | 'delete'): void => {
     void perform(actionKey(mutation, id), async () => {
       await mutateAutomation(id, mutation)
-      if (mutation === 'delete') setConfirmDeleteId(undefined)
+      if (mutation === 'delete') {
+        setConfirmDeleteId(undefined)
+        if (editingAutomation?.id === id) setEditingAutomation(undefined)
+      }
     })
   }
   const onRun = (id: string): void => {
@@ -377,10 +415,23 @@ export function AutomationView({
       setShowCreate(false)
     })
   }
+  const onUpdate = async (input: UpdateAutomationInput): Promise<void> => {
+    const automation = editingAutomation
+    if (automation === undefined) return
+    await perform(actionKey('update', automation.id), async () => {
+      await updateAutomation(automation.id, automation.revision, input)
+      setEditingAutomation(undefined)
+    })
+  }
+  const onEdit = (automation: AutomationViewModel): void => {
+    setShowCreate(false)
+    setConfirmDeleteId(undefined)
+    setEditingAutomation(automation)
+  }
 
   if (snapshot === undefined && (state.phase === 'idle' || state.phase === 'loading')) {
     return (
-      <div className="dsh-automation-shell dsh-automation-centered" role="status">
+      <div className="dsh-automation-shell dsh-automation-centered" data-conversation-composer-overlay="" role="status">
         <span className="dsh-automation-loader"><AutomationIcon /></span>
         <span>{t('loading')}</span>
       </div>
@@ -389,7 +440,7 @@ export function AutomationView({
 
   if (snapshot === undefined) {
     return (
-      <div className="dsh-automation-shell dsh-automation-centered">
+      <div className="dsh-automation-shell dsh-automation-centered" data-conversation-composer-overlay="">
         <span className="dsh-automation-error-icon"><AlertIcon /></span>
         <h2>{t('error.title')}</h2>
         <p>{state.error}</p>
@@ -401,7 +452,7 @@ export function AutomationView({
   }
 
   return (
-    <div className="dsh-automation-shell">
+    <div className="dsh-automation-shell" data-conversation-composer-overlay="">
       <header className="dsh-automation-header">
         <div className="dsh-automation-heading">
           <span className="dsh-automation-logo"><AutomationIcon /></span>
@@ -411,7 +462,10 @@ export function AutomationView({
             <p>{t('header.subtitle')}</p>
           </div>
         </div>
-        <button className="dsh-automation-button dsh-automation-button--primary" type="button" onClick={() => setShowCreate(value => !value)}>
+        <button className="dsh-automation-button dsh-automation-button--primary" type="button" onClick={() => {
+          setEditingAutomation(undefined)
+          setShowCreate(value => !value)
+        }}>
           {showCreate ? <PauseIcon /> : <PlusIcon />}
           {showCreate ? t('header.closeCreate') : t('header.create')}
         </button>
@@ -423,7 +477,19 @@ export function AutomationView({
       </div>
 
       {showCreate && (
-        <CreateAutomationForm t={t} busy={busyKey === actionKey('create')} onCancel={() => setShowCreate(false)} onSubmit={onCreate} />
+        <AutomationForm mode="create" t={t} busy={busyKey === actionKey('create')} onCancel={() => setShowCreate(false)} onSubmit={onCreate} />
+      )}
+
+      {editingAutomation !== undefined && (
+        <AutomationForm
+          key={`${editingAutomation.id}:${editingAutomation.revision}`}
+          mode="edit"
+          automation={editingAutomation}
+          t={t}
+          busy={busyKey === actionKey('update', editingAutomation.id)}
+          onCancel={() => setEditingAutomation(undefined)}
+          onSubmit={onUpdate}
+        />
       )}
 
       <section className="dsh-automation-stats" aria-label={t('header.title')}>
@@ -461,6 +527,7 @@ export function AutomationView({
                   busyKey={busyKey}
                   confirmingDelete={confirmDeleteId === automation.id}
                   onConfirmDelete={setConfirmDeleteId}
+                  onEdit={onEdit}
                   onMutate={onMutate}
                   onRun={onRun}
                 />
