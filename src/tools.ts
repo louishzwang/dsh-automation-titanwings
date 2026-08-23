@@ -27,6 +27,9 @@ interface CreateArgs extends ScheduleArgs {
   readonly prompt: string
   readonly kind: 'once' | 'interval' | 'daily' | 'weekly'
   readonly time_zone: string
+  readonly provider?: string | null
+  readonly model?: string | null
+  readonly reasoning_effort?: string | null
   readonly permission?: PermissionPreset
 }
 
@@ -35,12 +38,16 @@ interface UpdateArgs extends ScheduleArgs {
   readonly name?: string
   readonly prompt?: string
   readonly status?: 'active' | 'paused'
+  readonly provider?: string | null
+  readonly model?: string | null
+  readonly reasoning_effort?: string | null
   readonly permission?: PermissionPreset
 }
 
 interface IdArgs { readonly id: string }
 
 const SCHEDULE_FIELDS = ['time_zone', 'at', 'every_minutes', 'time', 'weekdays'] as const
+const NULLABLE_STRING = { oneOf: [{ type: 'string' }, { type: 'null' }] } as const
 
 function render(_args: unknown, value: JsonValue): { type: 'text'; text: string }[] {
   return [{ type: 'text', text: JSON.stringify(value) }]
@@ -79,6 +86,25 @@ function validateScheduleSelector(args: ScheduleArgs): void {
   if (unrelated.length > 0) throw new Error(`${args.kind} schedule does not accept ${unrelated.join(', ')}`)
 }
 
+function validateModelSelector(
+  args: { readonly provider?: string | null; readonly model?: string | null; readonly reasoning_effort?: string | null },
+  create: boolean,
+): void {
+  const providerSpecified = args.provider !== undefined
+  const modelSpecified = args.model !== undefined
+  if (providerSpecified !== modelSpecified) throw new Error('provider and model must be provided together')
+  if (providerSpecified && ((args.provider === null) !== (args.model === null))) {
+    throw new Error('provider and model must both be strings or both be null')
+  }
+  if (args.reasoning_effort !== undefined && args.reasoning_effort !== null
+    && providerSpecified && args.provider === null) {
+    throw new Error('reasoning_effort requires a pinned provider and model')
+  }
+  if (create && args.reasoning_effort !== undefined && !providerSpecified) {
+    throw new Error('reasoning_effort requires an explicit provider and model')
+  }
+}
+
 function scheduleFromArgs(args: ScheduleArgs, now: string): AutomationSchedule {
   validateScheduleSelector(args)
   const timeZone = String(args.time_zone ?? '')
@@ -107,7 +133,7 @@ export function registerAutomationTools(service: AutomationService, agent: ToolA
   try {
     register(defineTool({
       name: 'automation_create',
-      description: 'Create a durable standalone automation for this exact workspace. Each trigger starts a fresh DSH session and does not inherit this conversation. Use an explicit IANA time zone. Minimum interval is five minutes. Default to read-only unless writing files is necessary.',
+      description: 'Create a durable standalone automation for this exact workspace. Each trigger starts a fresh DSH session and does not inherit this conversation. Omit model fields to capture this Session selection, or set provider and model to null to follow the live global default. Use an explicit IANA time zone. Minimum interval is five minutes. Default to read-only unless writing files is necessary.',
       parameters: {
         name: { type: 'string', required: true },
         prompt: { type: 'string', required: true, description: 'Self-contained task prompt for every fresh run.' },
@@ -117,6 +143,9 @@ export function registerAutomationTools(service: AutomationService, agent: ToolA
         every_minutes: { type: 'integer', description: 'Interval in minutes, at least five.' },
         time: { type: 'string', description: 'Local HH:mm for daily or weekly.' },
         weekdays: { type: 'array', items: { type: 'string', enum: WEEKDAYS } },
+        provider: { ...NULLABLE_STRING, description: 'Provider route to pin. Set provider and model to null to follow the live global default.' },
+        model: { ...NULLABLE_STRING, description: 'Provider-owned model id. Must be supplied together with provider.' },
+        reasoning_effort: { ...NULLABLE_STRING, description: 'Adapter-owned effort id. Null uses the pinned model default.' },
         permission: { type: 'string', enum: ['read-only', 'workspace-write'] },
       },
       output: JSON_OUTPUT,
@@ -124,10 +153,14 @@ export function registerAutomationTools(service: AutomationService, agent: ToolA
         if (exec.agent !== agent || exec.signal.aborted) return json({ ok: false, code: 'cancelled' })
         try {
           const now = new Date().toISOString()
+          validateModelSelector(args, true)
           const value = await service.create(scope, {
             name: args.name,
             prompt: args.prompt,
             schedule: scheduleFromArgs(args, now),
+            ...(args.provider === undefined ? {} : { provider: args.provider }),
+            ...(args.model === undefined ? {} : { model: args.model }),
+            ...(args.reasoning_effort === undefined ? {} : { reasoningEffort: args.reasoning_effort }),
             permissionPreset: args.permission ?? 'read-only',
           }, exec.signal)
           return json({ ok: true, automation: value })
@@ -158,7 +191,7 @@ export function registerAutomationTools(service: AutomationService, agent: ToolA
 
     register(defineTool({
       name: 'automation_update',
-      description: 'Update an existing automation in this workspace instead of creating a duplicate. Omitted fields stay unchanged. A replacement schedule requires kind and its matching fields. Resuming starts from future occurrences and does not replay an old backlog.',
+      description: 'Update an existing automation in this workspace instead of creating a duplicate. Omitted fields stay unchanged; setting provider and model to null follows the live global default. A replacement schedule requires kind and its matching fields. Resuming starts from future occurrences and does not replay an old backlog.',
       parameters: {
         id: { type: 'string', required: true },
         name: { type: 'string' },
@@ -170,6 +203,9 @@ export function registerAutomationTools(service: AutomationService, agent: ToolA
         every_minutes: { type: 'integer' },
         time: { type: 'string' },
         weekdays: { type: 'array', items: { type: 'string', enum: WEEKDAYS } },
+        provider: { ...NULLABLE_STRING, description: 'Replacement provider route. Set provider and model to null to follow the live global default.' },
+        model: { ...NULLABLE_STRING, description: 'Replacement provider-owned model id. Must be supplied together with provider.' },
+        reasoning_effort: { ...NULLABLE_STRING, description: 'Replacement adapter-owned effort id. Null uses the pinned model default.' },
         permission: { type: 'string', enum: ['read-only', 'workspace-write'] },
       },
       output: JSON_OUTPUT,
@@ -177,16 +213,23 @@ export function registerAutomationTools(service: AutomationService, agent: ToolA
         if (exec.agent !== agent || exec.signal.aborted) return json({ ok: false, code: 'cancelled' })
         try {
           validateScheduleSelector(args)
+          validateModelSelector(args, false)
           const input: {
             name?: string
             prompt?: string
             status?: 'active' | 'paused'
             schedule?: AutomationSchedule
+            provider?: string | null
+            model?: string | null
+            reasoningEffort?: string | null
             permissionPreset?: PermissionPreset
           } = {}
           if (args.name !== undefined) input.name = String(args.name)
           if (args.prompt !== undefined) input.prompt = String(args.prompt)
           if (args.status !== undefined) input.status = args.status as 'active' | 'paused'
+          if (args.provider !== undefined) input.provider = args.provider
+          if (args.model !== undefined) input.model = args.model
+          if (args.reasoning_effort !== undefined) input.reasoningEffort = args.reasoning_effort
           if (args.permission !== undefined) input.permissionPreset = args.permission as PermissionPreset
           if (args.kind !== undefined) input.schedule = scheduleFromArgs(args, new Date().toISOString())
           if (Object.keys(input).length === 0) throw new Error('automation_update requires at least one changed field')

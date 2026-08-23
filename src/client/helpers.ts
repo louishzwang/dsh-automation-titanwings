@@ -6,6 +6,8 @@ import type {
   AutomationSnapshot,
   AutomationViewModel,
   CreateAutomationInput,
+  ModelCatalog,
+  ModelReasoningEffort,
   UpdateAutomationInput,
 } from './protocol.js'
 
@@ -21,6 +23,9 @@ export interface AutomationFormState {
   readonly time: string
   readonly weekdays: readonly number[]
   readonly timeZone: string
+  readonly provider: string | null
+  readonly model: string | null
+  readonly reasoningEffort: string | null
   readonly permission: CreateAutomationInput['permission']
 }
 
@@ -30,6 +35,7 @@ export type FormErrorKey =
   | 'form.error.once'
   | 'form.error.interval'
   | 'form.error.weekdays'
+  | 'form.error.model'
 
 export class AutomationFormError extends Error {
   constructor(readonly key: FormErrorKey) {
@@ -54,6 +60,9 @@ export function defaultFormState(now = new Date()): AutomationFormState {
     time: '09:00',
     weekdays: [1, 2, 3, 4, 5],
     timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
+    provider: null,
+    model: null,
+    reasoningEffort: null,
     permission: 'read-only',
   }
 }
@@ -81,7 +90,19 @@ export function formStateFromAutomation(automation: AutomationViewModel): Automa
     time: schedule.kind === 'daily' || schedule.kind === 'weekly' ? schedule.time : defaults.time,
     weekdays: schedule.kind === 'weekly' ? [...schedule.weekdays] : defaults.weekdays,
     timeZone: automation.timeZone,
+    provider: automation.provider,
+    model: automation.model,
+    reasoningEffort: automation.reasoningEffort,
     permission: automation.permission,
+  }
+}
+
+function validateModelTarget(form: AutomationFormState): void {
+  if ((form.provider === null) !== (form.model === null)) {
+    throw new AutomationFormError('form.error.model')
+  }
+  if (form.reasoningEffort !== null && form.provider === null) {
+    throw new AutomationFormError('form.error.model')
   }
 }
 
@@ -90,6 +111,7 @@ export function buildCreateInput(form: AutomationFormState, now = new Date()): C
   const prompt = form.prompt.trim()
   if (name === '') throw new AutomationFormError('form.error.name')
   if (prompt === '') throw new AutomationFormError('form.error.prompt')
+  validateModelTarget(form)
 
   let schedule: CreateAutomationInput['schedule']
   switch (form.scheduleKind) {
@@ -122,7 +144,16 @@ export function buildCreateInput(form: AutomationFormState, now = new Date()): C
       schedule = { kind: 'weekly', time: form.time, weekdays: [...form.weekdays].sort((a, b) => a - b), timeZone: form.timeZone }
       break
   }
-  return { name, prompt, schedule, timeZone: form.timeZone, permission: form.permission }
+  return {
+    name,
+    prompt,
+    schedule,
+    timeZone: form.timeZone,
+    provider: form.provider,
+    model: form.model,
+    reasoningEffort: form.reasoningEffort,
+    permission: form.permission,
+  }
 }
 
 function scheduleMatchesDraft(form: AutomationFormState, automation: AutomationViewModel): boolean {
@@ -152,8 +183,10 @@ export function buildUpdateInput(
   const prompt = form.prompt.trim()
   if (name === '') throw new AutomationFormError('form.error.name')
   if (prompt === '') throw new AutomationFormError('form.error.prompt')
+  validateModelTarget(form)
 
   const scheduleChanged = !scheduleMatchesDraft(form, automation)
+  const routeChanged = form.provider !== automation.provider || form.model !== automation.model
   const replacement = scheduleChanged ? buildCreateInput(form, now) : undefined
   return {
     ...(name === automation.name ? {} : { name }),
@@ -162,8 +195,77 @@ export function buildUpdateInput(
       schedule: replacement.schedule,
       timeZone: replacement.timeZone,
     }),
+    ...(routeChanged
+      ? {
+          provider: form.provider,
+          model: form.model,
+          reasoningEffort: form.reasoningEffort,
+        }
+      : form.reasoningEffort === automation.reasoningEffort
+        ? {}
+        : { reasoningEffort: form.reasoningEffort }),
     ...(form.permission === automation.permission ? {} : { permission: form.permission }),
   }
+}
+
+export interface ModelRouteChoice {
+  readonly provider: string
+  readonly providerName: string
+  readonly model: string
+  readonly modelName: string
+  readonly description?: string
+  readonly unavailable: boolean
+}
+
+/** Flatten successful groups and retain the current pinned route when it disappeared. */
+export function modelRouteChoices(
+  catalog: ModelCatalog,
+  currentProvider: string | null,
+  currentModel: string | null,
+): readonly ModelRouteChoice[] {
+  const choices = catalog.groups.flatMap(group => group.models.map(model => ({
+    provider: group.id,
+    providerName: group.name,
+    model: model.id,
+    modelName: model.name,
+    ...(model.description === undefined ? {} : { description: model.description }),
+    unavailable: false,
+  })))
+  if (currentProvider === null || currentModel === null
+    || choices.some(choice => choice.provider === currentProvider && choice.model === currentModel)) {
+    return choices
+  }
+  return [{
+    provider: currentProvider,
+    providerName: currentProvider,
+    model: currentModel,
+    modelName: currentModel,
+    unavailable: true,
+  }, ...choices]
+}
+
+export interface ReasoningEffortChoice extends ModelReasoningEffort {
+  readonly unavailable: boolean
+}
+
+/** Use exact-model opaque effort ids and retain an unavailable current pin. */
+export function reasoningEffortChoices(
+  catalog: ModelCatalog,
+  provider: string | null,
+  model: string | null,
+  currentEffort: string | null,
+): readonly ReasoningEffortChoice[] {
+  const catalogModel = provider === null || model === null
+    ? undefined
+    : catalog.groups
+      .find(group => group.id === provider)
+      ?.models.find(item => item.id === model)
+  const choices = (catalogModel?.reasoning?.efforts ?? []).map(effort => ({
+    ...effort,
+    unavailable: false,
+  }))
+  if (currentEffort === null || choices.some(choice => choice.id === currentEffort)) return choices
+  return [{ id: currentEffort, name: currentEffort, unavailable: true }, ...choices]
 }
 
 const ATTENTION_STATUSES = new Set<AutomationRunStatus>(['failed', 'interrupted'])

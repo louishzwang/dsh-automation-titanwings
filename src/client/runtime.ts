@@ -1,4 +1,4 @@
-import type { ClientRpc } from './contracts.js'
+import type { ClientLlmApi, ClientRpc } from './contracts.js'
 import type {
   AutomationSnapshot,
   CreateAutomationInput,
@@ -9,6 +9,7 @@ import type {
   SnapshotRequest,
   UpdateAutomationInput,
   UpdateRequest,
+  ModelCatalog,
 } from './protocol.js'
 import { unwrapRpcResult } from './protocol.js'
 
@@ -35,6 +36,12 @@ export interface AutomationRuntime {
   runNow(automationId: string): Promise<void>
   markRunRead(runId: string): Promise<void>
   openRunSession(runId: string, open: () => Promise<void>): Promise<void>
+}
+
+/** Read the Host-wide catalog without discarding sound providers when peers fail. */
+export async function loadModelCatalog(api: ClientLlmApi): Promise<ModelCatalog> {
+  const response = await api.models({})
+  return unwrapRpcResult<ModelCatalog>(response.result)
 }
 
 /** One session-scoped observable; the framework binds it into useAutomationState. */

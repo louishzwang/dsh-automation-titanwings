@@ -9,11 +9,13 @@ import {
   formStateFromAutomation,
   formatRelativeTime,
   formatSchedule,
+  modelRouteChoices,
+  reasoningEffortChoices,
 } from '../src/client/helpers.js'
 import { en, zh } from '../src/client/locales.js'
 import { RecentRun } from '../src/client/AutomationView.js'
-import { createAutomationRuntime } from '../src/client/runtime.js'
-import type { AutomationSnapshot } from '../src/client/protocol.js'
+import { createAutomationRuntime, loadModelCatalog } from '../src/client/runtime.js'
+import type { AutomationSnapshot, ModelCatalog } from '../src/client/protocol.js'
 
 const t = (key: keyof typeof en, params?: Record<string, unknown>): string => {
   let value: string = en[key]
@@ -51,6 +53,9 @@ test('buildCreateInput trims text and normalizes a weekly schedule', () => {
     prompt: 'Inspect failed tests.',
     schedule: { kind: 'weekly', time: '08:30', weekdays: [1, 3, 5], timeZone: 'Asia/Shanghai' },
     timeZone: 'Asia/Shanghai',
+    provider: null,
+    model: null,
+    reasoningEffort: null,
     permission: 'workspace-write',
   })
 })
@@ -82,6 +87,9 @@ test('editing starts from the complete stored prompt and preserves interval cade
     },
     scheduleSummary: 'Every 45 minutes',
     timeZone: 'Asia/Shanghai',
+    provider: 'provider-a',
+    model: 'model-a',
+    reasoningEffort: 'opaque-high',
     permission: 'workspace-write',
     createdAt: '2026-08-12T00:00:00.000Z',
     updatedAt: '2026-08-13T00:00:00.000Z',
@@ -100,6 +108,9 @@ test('editing starts from the complete stored prompt and preserves interval cade
       timeZone: 'Asia/Shanghai',
     },
     timeZone: 'Asia/Shanghai',
+    provider: 'provider-a',
+    model: 'model-a',
+    reasoningEffort: 'opaque-high',
     permission: 'workspace-write',
   })
   assert.deepEqual(buildUpdateInput({ ...form, prompt: `${form.prompt}\nAdd a short risk summary.` }, automation), {
@@ -112,7 +123,8 @@ test('editing a completed one-shot can change its prompt without resubmitting a 
     id: 'automation-once', revision: 2, name: 'Completed migration',
     prompt: 'Summarize the migration.', status: 'paused',
     schedule: { kind: 'once', at: '2026-08-12T08:00:00.000Z', timeZone: 'UTC' },
-    scheduleSummary: 'Once', timeZone: 'UTC', permission: 'read-only',
+    scheduleSummary: 'Once', timeZone: 'UTC', provider: null, model: null,
+    reasoningEffort: null, permission: 'read-only',
     createdAt: '2026-08-11T00:00:00.000Z', updatedAt: '2026-08-12T08:00:00.000Z',
   }
   const form = formStateFromAutomation(automation)
@@ -123,6 +135,107 @@ test('editing a completed one-shot can change its prompt without resubmitting a 
   ), { prompt: 'Summarize the migration and include evidence.' })
 })
 
+test('model edits preserve omission, clear with null, and pin opaque effort values', () => {
+  const automation: AutomationSnapshot['automations'][number] = {
+    id: 'automation-model', revision: 4, name: 'Model target',
+    prompt: 'Inspect one condition.', status: 'active',
+    schedule: { kind: 'daily', time: '09:00', timeZone: 'UTC' },
+    scheduleSummary: 'Daily', timeZone: 'UTC', permission: 'read-only',
+    provider: 'provider-a', model: 'model-a', reasoningEffort: 'adapter-high',
+    createdAt: '2026-08-11T00:00:00.000Z', updatedAt: '2026-08-12T08:00:00.000Z',
+  }
+  const form = formStateFromAutomation(automation)
+
+  assert.deepEqual(buildUpdateInput(form, automation), {})
+  assert.deepEqual(buildUpdateInput({ ...form, reasoningEffort: null }, automation), {
+    reasoningEffort: null,
+  })
+  assert.deepEqual(buildUpdateInput({
+    ...form,
+    provider: 'provider-b',
+    model: 'model-b',
+    reasoningEffort: 'provider-owned-effort',
+  }, automation), {
+    provider: 'provider-b',
+    model: 'model-b',
+    reasoningEffort: 'provider-owned-effort',
+  })
+  assert.deepEqual(buildUpdateInput({
+    ...form,
+    provider: null,
+    model: null,
+    reasoningEffort: null,
+  }, automation), {
+    provider: null,
+    model: null,
+    reasoningEffort: null,
+  })
+})
+
+test('catalog choices keep successful providers and unavailable current pins', () => {
+  const catalog: ModelCatalog = {
+    groups: [{
+      id: 'provider-live',
+      name: 'Live Provider',
+      models: [{
+        id: 'model-live',
+        name: 'Live Model',
+        reasoning: {
+          efforts: [
+            { id: 'adapter-low', name: 'Low' },
+            { id: 'adapter-high', name: 'High', description: 'More reasoning' },
+          ],
+          defaultEffort: 'adapter-low',
+        },
+      }],
+    }],
+    failures: [{ id: 'provider-offline', name: 'Offline Provider', message: 'catalog offline' }],
+  }
+
+  assert.deepEqual(modelRouteChoices(catalog, 'provider-removed', 'model-removed'), [
+    {
+      provider: 'provider-removed', providerName: 'provider-removed',
+      model: 'model-removed', modelName: 'model-removed', unavailable: true,
+    },
+    {
+      provider: 'provider-live', providerName: 'Live Provider',
+      model: 'model-live', modelName: 'Live Model', unavailable: false,
+    },
+  ])
+  assert.deepEqual(reasoningEffortChoices(
+    catalog,
+    'provider-live',
+    'model-live',
+    'adapter-retired',
+  ), [
+    { id: 'adapter-retired', name: 'adapter-retired', unavailable: true },
+    { id: 'adapter-low', name: 'Low', unavailable: false },
+    { id: 'adapter-high', name: 'High', description: 'More reasoning', unavailable: false },
+  ])
+})
+
+test('Host-wide model catalog uses the official API envelope and preserves partial failures', async () => {
+  const catalog: ModelCatalog = {
+    groups: [{ id: 'provider', name: 'Provider', models: [{ id: 'model', name: 'Model' }] }],
+    failures: [{ id: 'broken', name: 'Broken', message: 'offline' }],
+  }
+  const calls: unknown[] = []
+  const value = await loadModelCatalog({
+    models: async (payload) => {
+      calls.push(payload)
+      return { result: { ok: true, value: catalog } }
+    },
+  })
+  assert.deepEqual(calls, [{}])
+  assert.equal(value, catalog)
+
+  await assert.rejects(() => loadModelCatalog({
+    models: async () => ({
+      result: { ok: false, error: { code: 'catalog-unavailable', message: 'host offline' } },
+    }),
+  }), /host offline/)
+})
+
 test('deriveOverview counts active definitions and unread failures', () => {
   const snapshot: AutomationSnapshot = {
     scope: { cwd: '/workspace' },
@@ -131,13 +244,15 @@ test('deriveOverview counts active definitions and unread failures', () => {
       {
         id: 'a1', revision: 1, name: 'A', prompt: 'A', status: 'active',
         schedule: { kind: 'daily', time: '09:00' }, scheduleSummary: 'Daily at 09:00',
-        timeZone: 'UTC', permission: 'read-only', nextRunAt: '2026-08-13T09:00:00.000Z',
+        timeZone: 'UTC', provider: null, model: null, reasoningEffort: null,
+        permission: 'read-only', nextRunAt: '2026-08-13T09:00:00.000Z',
         createdAt: '2026-08-12T00:00:00.000Z', updatedAt: '2026-08-12T00:00:00.000Z',
       },
       {
         id: 'a2', revision: 1, name: 'B', prompt: 'B', status: 'paused',
         schedule: { kind: 'interval', everyMinutes: 60 }, scheduleSummary: 'Every hour',
-        timeZone: 'UTC', permission: 'workspace-write', createdAt: '2026-08-12T00:00:00.000Z',
+        timeZone: 'UTC', provider: 'provider-b', model: 'model-b', reasoningEffort: null,
+        permission: 'workspace-write', createdAt: '2026-08-12T00:00:00.000Z',
         updatedAt: '2026-08-12T00:00:00.000Z',
       },
     ],

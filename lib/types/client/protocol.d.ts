@@ -2,6 +2,35 @@
 export type AutomationStatus = 'active' | 'paused';
 export type AutomationRunStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'skipped' | 'cancelled' | 'interrupted';
 export type AutomationPermission = 'read-only' | 'workspace-write';
+export interface ModelReasoningEffort {
+    readonly id: string;
+    readonly name: string;
+    readonly description?: string;
+}
+export interface ModelReasoning {
+    readonly efforts: readonly ModelReasoningEffort[];
+    readonly defaultEffort?: string;
+}
+export interface ModelCatalogModel {
+    readonly id: string;
+    readonly name: string;
+    readonly description?: string;
+    readonly reasoning?: ModelReasoning;
+}
+export interface ModelProviderGroup {
+    readonly id: string;
+    readonly name: string;
+    readonly models: readonly ModelCatalogModel[];
+}
+export interface ModelCatalogFailure {
+    readonly id: string;
+    readonly name: string;
+    readonly message: string;
+}
+export interface ModelCatalog {
+    readonly groups: readonly ModelProviderGroup[];
+    readonly failures: readonly ModelCatalogFailure[];
+}
 export type AutomationSchedule = {
     readonly kind: 'once';
     readonly at: string;
@@ -30,6 +59,9 @@ export interface AutomationViewModel {
     readonly schedule: AutomationSchedule;
     readonly scheduleSummary: string;
     readonly timeZone: string;
+    readonly provider: string | null;
+    readonly model: string | null;
+    readonly reasoningEffort: string | null;
     readonly permission: AutomationPermission;
     readonly nextRunAt?: string;
     readonly lastRunAt?: string;
@@ -67,6 +99,9 @@ export interface CreateAutomationInput {
     readonly prompt: string;
     readonly schedule: AutomationSchedule;
     readonly timeZone: string;
+    readonly provider: string | null;
+    readonly model: string | null;
+    readonly reasoningEffort: string | null;
     readonly permission: AutomationPermission;
 }
 export interface UpdateAutomationInput {
@@ -74,6 +109,9 @@ export interface UpdateAutomationInput {
     readonly prompt?: string;
     readonly schedule?: AutomationSchedule;
     readonly timeZone?: string;
+    readonly provider?: string | null;
+    readonly model?: string | null;
+    readonly reasoningEffort?: string | null;
     readonly permission?: AutomationPermission;
 }
 export interface SnapshotRequest {

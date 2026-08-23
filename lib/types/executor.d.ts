@@ -1,6 +1,7 @@
 /** Fresh-Agent execution boundary for one already-claimed automation run. */
+import { type ModelSelection } from '@deepseek-ai/dsh-agent';
 import type { Context } from '@deepseek-ai/cordis';
-import type { AutomationDefinition, AutomationRun } from './types.ts';
+import type { AutomationDefinition, AutomationRun, AutomationTargetSnapshot } from './types.ts';
 interface SessionEventLike {
     readonly seq: number;
     readonly type: string;
@@ -27,6 +28,8 @@ export declare function summarizeRun(events: readonly SessionEventLike[], firstS
     readonly text: string;
     readonly reason?: Record<string, any>;
 };
+/** Resolve one run's immutable target without leaking an unrelated default effort into a pinned model. */
+export declare function modelSelectionForRun(target: AutomationTargetSnapshot, fallback: ModelSelection): ModelSelection;
 /**
  * Execute exactly one durable run in a fresh root Agent. The new Session owns
  * no source-chat history or grant; policy and model selection are installed

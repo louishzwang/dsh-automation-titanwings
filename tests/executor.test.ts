@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createDefinition, createManualRun } from '../src/domain.ts'
-import { executeAutomationRun, unattendedToolGuardReason } from '../src/executor.ts'
+import { executeAutomationRun, modelSelectionForRun, unattendedToolGuardReason } from '../src/executor.ts'
 
 class TrackingAbortSignal {
   aborted = false
@@ -95,6 +95,32 @@ test('unattended tool guard preserves foreground coding and read tools', () => {
   assert.equal(unattendedToolGuardReason('bash', { command: 'pnpm test' }), undefined)
   assert.equal(unattendedToolGuardReason('web_search', { query: 'package docs' }), undefined)
   assert.match(unattendedToolGuardReason('third_party_side_effect', {}) ?? '', /allowlist/)
+})
+
+test('run model selection keeps live defaults coherent and never leaks their effort into a pinned model', () => {
+  const fixture = executorFixture()
+  const fallback = { provider: 'global-provider', model: 'global-model', reasoningEffort: 'global-effort' }
+  assert.equal(modelSelectionForRun(fixture.run.targetSnapshot, fallback), fallback)
+
+  assert.deepEqual(modelSelectionForRun({
+    ...fixture.run.targetSnapshot,
+    provider: 'pinned-provider',
+    model: 'pinned-model',
+    reasoningEffort: null,
+  }, fallback), {
+    provider: 'pinned-provider',
+    model: 'pinned-model',
+  })
+  assert.deepEqual(modelSelectionForRun({
+    ...fixture.run.targetSnapshot,
+    provider: 'pinned-provider',
+    model: 'pinned-model',
+    reasoningEffort: 'adapter-owned-effort',
+  }, fallback), {
+    provider: 'pinned-provider',
+    model: 'pinned-model',
+    reasoningEffort: 'adapter-owned-effort',
+  })
 })
 
 test('executor removes its abort listener after a normally completed run', async () => {

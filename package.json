@@ -1,6 +1,6 @@
 {
   "name": "@dsh-external/dsh-automation",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "Run coding tasks on schedule in fresh Agent sessions, and manage automations from DeepSeek Harness Web or an Agent",
   "type": "module",
   "main": "./lib/index.js",
@@ -46,7 +46,8 @@
         "@deepseek-ai/dsh-client-connection",
         "@deepseek-ai/dsh-client-runtime",
         "@deepseek-ai/dsh-client-locale",
-        "@deepseek-ai/dsh-client-ui-conversation"
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-sidebar"
       ]
     }
   },

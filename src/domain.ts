@@ -7,6 +7,7 @@ import type {
 } from './types.ts'
 
 const nonBlank = z.string().trim().min(1)
+const opaqueNonBlank = z.string().refine(value => value.trim() !== '', 'must not be blank')
 const instant = z.string().datetime({ offset: true })
 const timeZone = nonBlank
 const weekday = z.enum(['MO', 'TU', 'WE', 'TH', 'FR', 'SA', 'SU'])
@@ -24,14 +25,39 @@ export const automationScheduleSchema = z.discriminatedUnion('kind', [
 
 const permissionPreset = z.enum(['read-only', 'workspace-write'])
 const creator = z.object({ kind: z.enum(['agent', 'web']), sessionId: nonBlank })
+const modelTarget = {
+  provider: opaqueNonBlank.nullable().default(null),
+  model: opaqueNonBlank.nullable().default(null),
+  reasoningEffort: opaqueNonBlank.nullable().default(null),
+} as const
+
+function validateModelTarget(
+  value: { readonly provider: string | null; readonly model: string | null; readonly reasoningEffort: string | null },
+  ctx: z.core.$RefinementCtx,
+): void {
+  if ((value.provider === null) !== (value.model === null)) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'provider and model must both be set or both be null',
+      path: value.provider === null ? ['provider'] : ['model'],
+    })
+  }
+  if (value.reasoningEffort !== null && (value.provider === null || value.model === null)) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'reasoningEffort requires a pinned provider and model',
+      path: ['reasoningEffort'],
+    })
+  }
+}
+
 const targetSnapshot = z.object({
   workspaceId: nonBlank,
   cwd: nonBlank,
   agentPreset: nonBlank,
-  provider: z.string().nullable(),
-  model: z.string().nullable(),
+  ...modelTarget,
   permissionPreset,
-})
+}).superRefine(validateModelTarget)
 
 export const automationDefinitionSchema: z.ZodType<AutomationDefinition> = z.object({
   version: z.literal(1),
@@ -46,8 +72,7 @@ export const automationDefinitionSchema: z.ZodType<AutomationDefinition> = z.obj
   workspaceId: nonBlank,
   cwd: nonBlank,
   agentPreset: nonBlank,
-  provider: z.string().nullable(),
-  model: z.string().nullable(),
+  ...modelTarget,
   permissionPreset,
   createdBy: creator,
   createdAt: instant,
@@ -60,6 +85,7 @@ export const automationDefinitionSchema: z.ZodType<AutomationDefinition> = z.obj
     if (value.rrule !== scheduleToRRule(value.schedule)) {
       ctx.addIssue({ code: 'custom', message: 'rrule must be derived from schedule', path: ['rrule'] })
     }
+    validateModelTarget(value, ctx)
   } catch (error) {
     ctx.addIssue({ code: 'custom', message: String(error), path: ['schedule'] })
   }
@@ -115,6 +141,7 @@ export function createDefinition(input: CreateAutomationInput): AutomationDefini
     agentPreset: requireNonBlank(input.agentPreset, 'agentPreset'),
     provider: input.provider ?? null,
     model: input.model ?? null,
+    reasoningEffort: input.reasoningEffort ?? null,
     permissionPreset: input.permissionPreset ?? 'read-only',
     createdBy: input.createdBy,
     createdAt: now,
@@ -126,23 +153,33 @@ export function updateDefinition(
   current: AutomationDefinition,
   input: UpdateAutomationInput,
 ): AutomationDefinition {
-  automationDefinitionSchema.parse(current)
-  const schedule = normalizeSchedule(input.schedule ?? current.schedule)
+  const validated = automationDefinitionSchema.parse(current)
+  const providerChanged = input.provider !== undefined
+  const modelChanged = input.model !== undefined
+  if (providerChanged !== modelChanged) throw new Error('provider and model must be updated together')
+  const provider = providerChanged ? input.provider! : validated.provider
+  const model = modelChanged ? input.model! : validated.model
+  const routeChanged = provider !== validated.provider || model !== validated.model
+  const reasoningEffort = input.reasoningEffort === undefined
+    ? routeChanged ? null : validated.reasoningEffort
+    : input.reasoningEffort
+  const schedule = normalizeSchedule(input.schedule ?? validated.schedule)
   return automationDefinitionSchema.parse({
-    ...current,
-    revision: current.revision + 1,
-    name: input.name === undefined ? current.name : requireNonBlank(input.name, 'name'),
-    prompt: input.prompt === undefined ? current.prompt : requireNonBlank(input.prompt, 'prompt'),
-    status: input.status ?? current.status,
+    ...validated,
+    revision: validated.revision + 1,
+    name: input.name === undefined ? validated.name : requireNonBlank(input.name, 'name'),
+    prompt: input.prompt === undefined ? validated.prompt : requireNonBlank(input.prompt, 'prompt'),
+    status: input.status ?? validated.status,
     schedule,
     rrule: scheduleToRRule(schedule),
     timeZone: schedule.timeZone,
     agentPreset: input.agentPreset === undefined
-      ? current.agentPreset
+      ? validated.agentPreset
       : requireNonBlank(input.agentPreset, 'agentPreset'),
-    provider: input.provider === undefined ? current.provider : input.provider,
-    model: input.model === undefined ? current.model : input.model,
-    permissionPreset: input.permissionPreset ?? current.permissionPreset,
+    provider,
+    model,
+    reasoningEffort,
+    permissionPreset: input.permissionPreset ?? validated.permissionPreset,
     updatedAt: parseInstant(input.now, 'now'),
   })
 }
@@ -228,6 +265,7 @@ function queuedRun(
       agentPreset: definition.agentPreset,
       provider: definition.provider,
       model: definition.model,
+      reasoningEffort: definition.reasoningEffort,
       permissionPreset: definition.permissionPreset,
     },
     sessionId: null,

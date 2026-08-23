@@ -1,7 +1,8 @@
 import { AutomationView } from './AutomationView.js'
+import { AutomationSidebarAction } from './AutomationSidebarAction.js'
 import type { ClientContext } from './contracts.js'
 import { en, NS, zh } from './locales.js'
-import { createAutomationRuntime } from './runtime.js'
+import { createAutomationRuntime, loadModelCatalog } from './runtime.js'
 import { installStyles } from './styles.js'
 
 export const name = 'dsh-automation-client'
@@ -12,10 +13,20 @@ export function apply(ctx: ClientContext): void {
   ctx.effect(() => installStyles(), 'dsh-automation: styles')
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'dsh-automation: locale')
   const t = ctx.locale.bind(NS)
+  const readModelCatalog = () => loadModelCatalog(ctx.connection.api.llm)
   // Inject factories can run more than once while React reconciles. Keep one
   // observable identity per session for the lifetime of this plugin fiber.
   const runtimes = new Map<string, ReturnType<typeof createAutomationRuntime>>()
   ctx.effect(() => () => { runtimes.clear() }, 'dsh-automation: session runtimes')
+  ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register({
+    name: 'sidebar.footer.action',
+    id: 'automation',
+    order: 40,
+    locale: NS,
+    inject: () => ({
+      automationTabs: () => document.querySelectorAll<HTMLElement>('[role="tab"]'),
+    }),
+  }, AutomationSidebarAction))
   ctx.slots.inject('conversation.view', () => ctx.slots.register({
     name: 'conversation.view',
     id: 'automation',
@@ -36,6 +47,7 @@ export function apply(ctx: ClientContext): void {
         mutateAutomation: runtime.mutateAutomation,
         runNow: runtime.runNow,
         markRunRead: runtime.markRunRead,
+        loadModelCatalog: readModelCatalog,
         openSession: (runId, runSessionId) => runtime!.openRunSession(runId, async () => {
           await ctx.sessions.refresh()
           ctx.sessions.open(runSessionId)

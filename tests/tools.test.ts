@@ -4,15 +4,18 @@ import { registerAutomationTools } from '../src/tools.ts'
 
 interface ToolDefinition {
   readonly name: string
+  readonly parameters?: Record<string, unknown>
   execute(args: unknown, context: { readonly agent?: unknown; readonly signal: AbortSignal }): Promise<unknown>
 }
 
 test('Agent management tools require the exact registered Agent identity, not a recycled id', async () => {
   const registered = new Map<string, ToolDefinition>()
   let createCalls = 0
+  let createRequest: Record<string, unknown> | undefined
   const service = {
-    create: async () => {
+    create: async (_scope: unknown, request: Record<string, unknown>) => {
       createCalls += 1
+      createRequest = request
       return { id: 'automation-created' }
     },
     snapshot: async () => ({ definitions: [], runs: [] }),
@@ -50,8 +53,83 @@ test('Agent management tools require the exact registered Agent identity, not a 
   const ownerResult = await tool.execute(args, { agent, signal })
   assert.deepEqual(ownerResult, { ok: true, automation: { id: 'automation-created' } })
   assert.equal(createCalls, 1)
+  assert.equal(Object.hasOwn(createRequest ?? {}, 'provider'), false)
+  assert.equal(Object.hasOwn(createRequest ?? {}, 'model'), false)
+  assert.equal(Object.hasOwn(createRequest ?? {}, 'reasoningEffort'), false)
   dispose()
   assert.equal(registered.size, 0)
+})
+
+test('Agent tools expose nullable model fields and preserve explicit pin/global updates', async () => {
+  const registered = new Map<string, ToolDefinition>()
+  const calls: Array<{ readonly method: string; readonly input: Record<string, unknown> }> = []
+  const service = {
+    create: async (_scope: unknown, input: Record<string, unknown>) => {
+      calls.push({ method: 'create', input })
+      return { id: 'automation-created' }
+    },
+    update: async (_scope: unknown, _id: string, input: Record<string, unknown>) => {
+      calls.push({ method: 'update', input })
+      return { id: 'automation-created' }
+    },
+  }
+  const agent = {
+    id: 'agent-owner',
+    ctx: {
+      tools: {
+        register: (definition: unknown) => {
+          const tool = definition as ToolDefinition
+          registered.set(tool.name, tool)
+          return () => { registered.delete(tool.name) }
+        },
+      },
+    },
+  }
+  const dispose = registerAutomationTools(service as never, agent)
+  const signal = new AbortController().signal
+  const create = registered.get('automation_create')!
+  assert.deepEqual(
+    (create.parameters?.provider as { readonly oneOf?: unknown }).oneOf,
+    [{ type: 'string' }, { type: 'null' }],
+  )
+
+  const created = await create.execute({
+    name: 'Pinned automation',
+    prompt: 'Inspect one bounded condition.',
+    kind: 'daily',
+    time_zone: 'UTC',
+    time: '09:00',
+    provider: 'provider-route',
+    model: 'model-id',
+    reasoning_effort: 'custom-effort',
+  }, { agent, signal })
+  assert.deepEqual(created, { ok: true, automation: { id: 'automation-created' } })
+  assert.deepEqual(calls[0]?.input, {
+    name: 'Pinned automation',
+    prompt: 'Inspect one bounded condition.',
+    schedule: { kind: 'daily', time: '09:00', timeZone: 'UTC' },
+    provider: 'provider-route',
+    model: 'model-id',
+    reasoningEffort: 'custom-effort',
+    permissionPreset: 'read-only',
+  })
+
+  const updated = await registered.get('automation_update')!.execute({
+    id: 'automation-created',
+    provider: null,
+    model: null,
+  }, { agent, signal })
+  assert.deepEqual(updated, { ok: true, automation: { id: 'automation-created' } })
+  assert.deepEqual(calls[1]?.input, { provider: null, model: null })
+
+  const partial = await registered.get('automation_update')!.execute({
+    id: 'automation-created',
+    provider: 'provider-only',
+  }, { agent, signal }) as { readonly ok: boolean; readonly message?: string }
+  assert.equal(partial.ok, false)
+  assert.match(partial.message ?? '', /provided together/)
+  assert.equal(calls.length, 2)
+  dispose()
 })
 
 test('a cancelled Agent mutation receives the execution signal and reports cancellation', async () => {

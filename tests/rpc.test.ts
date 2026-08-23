@@ -18,7 +18,7 @@ test('snapshot marks archived run Sessions so the client never offers a broken o
         scheduledFor: '2026-08-17T00:00:00.000Z', status: 'succeeded',
         promptSnapshot: 'Inspect one condition.', targetSnapshot: {
           workspaceId: 'workspace-1', cwd: '/workspace/repo', agentPreset: 'code',
-          provider: null, model: null, permissionPreset: 'read-only',
+          provider: null, model: null, reasoningEffort: null, permissionPreset: 'read-only',
         },
         sessionId: 'dsh-automation-session-archived', sessionArchived: true,
         startedAt: '2026-08-17T00:00:01.000Z', finishedAt: '2026-08-17T00:00:02.000Z',
@@ -43,6 +43,46 @@ test('snapshot marks archived run Sessions so the client never offers a broken o
       }],
       serverNow: '2026-08-17T00:00:00.000Z',
     },
+  })
+})
+
+test('snapshot exposes the complete durable model target to the Web client', async () => {
+  let handler: ((endpoint: string, payload: unknown, signal: AbortSignal) => Promise<unknown>) | undefined
+  const ctx = {
+    connection: { rpc: { handle: (_channel: string, value: typeof handler) => { handler = value; return async () => {} } } },
+  }
+  const service = {
+    snapshot: async () => ({
+      generatedAt: '2026-08-17T00:00:00.000Z',
+      workspace: { id: 'workspace-1', title: 'Repository', path: '/workspace/repo' },
+      definitions: [{
+        version: 1, id: 'automation-pinned', revision: 1, name: 'Pinned task',
+        prompt: 'Inspect one condition.', status: 'active',
+        schedule: { kind: 'daily', time: '09:00', timeZone: 'UTC' },
+        rrule: 'RRULE:FREQ=DAILY', timeZone: 'UTC', workspaceId: 'workspace-1',
+        cwd: '/workspace/repo', agentPreset: 'code', provider: 'provider-route', model: 'model-id',
+        reasoningEffort: 'custom-effort', permissionPreset: 'read-only',
+        createdBy: { kind: 'web', sessionId: 'session-source' },
+        createdAt: '2026-08-16T00:00:00.000Z', updatedAt: '2026-08-16T00:00:00.000Z',
+        nextRunAt: '2026-08-18T09:00:00.000Z', lastRun: null,
+      }],
+      runs: [],
+    }),
+  }
+  registerAutomationRpc(ctx as never, service as never)
+
+  const response = await handler?.('snapshot', { sessionId: 'session-source' }, new AbortController().signal) as {
+    readonly ok: true
+    readonly value: { readonly automations: readonly Record<string, unknown>[] }
+  }
+  assert.equal(response.ok, true)
+  assert.deepEqual(response.value.automations[0], {
+    id: 'automation-pinned', revision: 1, name: 'Pinned task', prompt: 'Inspect one condition.', status: 'active',
+    schedule: { kind: 'daily', time: '09:00', timeZone: 'UTC' },
+    scheduleSummary: 'RRULE:FREQ=DAILY', timeZone: 'UTC',
+    provider: 'provider-route', model: 'model-id', reasoningEffort: 'custom-effort',
+    permission: 'read-only', nextRunAt: '2026-08-18T09:00:00.000Z',
+    createdAt: '2026-08-16T00:00:00.000Z', updatedAt: '2026-08-16T00:00:00.000Z',
   })
 })
 
@@ -130,6 +170,67 @@ test('RPC schedule inputs are strict JSON contracts and do not coerce strings or
   assert.equal(createCalls, 0)
 })
 
+test('create RPC preserves omitted, pinned, and explicit live-global model targets', async () => {
+  let handler: ((endpoint: string, payload: unknown, signal: AbortSignal) => Promise<unknown>) | undefined
+  const calls: unknown[] = []
+  const ctx = {
+    connection: { rpc: { handle: (_channel: string, value: typeof handler) => { handler = value; return async () => {} } } },
+  }
+  const service = {
+    create: async (_scope: unknown, input: unknown) => {
+      calls.push(input)
+      return { id: 'created', revision: 1 }
+    },
+  }
+  registerAutomationRpc(ctx as never, service as never)
+  const signal = new AbortController().signal
+  const base = {
+    sessionId: 'session-source',
+    input: {
+      name: 'Model target', prompt: 'Inspect one condition.', timeZone: 'UTC',
+      schedule: { kind: 'daily', time: '09:00' },
+    },
+  }
+
+  await handler?.('create', base, signal)
+  await handler?.('create', {
+    ...base,
+    input: {
+      ...base.input,
+      provider: 'provider-route', model: 'model-id', reasoningEffort: 'opaque-effort',
+    },
+  }, signal)
+  await handler?.('create', {
+    ...base,
+    input: { ...base.input, provider: null, model: null },
+  }, signal)
+  assert.deepEqual(calls, [
+    {
+      name: 'Model target', prompt: 'Inspect one condition.',
+      schedule: { kind: 'daily', time: '09:00', timeZone: 'UTC' }, permissionPreset: 'read-only',
+    },
+    {
+      name: 'Model target', prompt: 'Inspect one condition.',
+      schedule: { kind: 'daily', time: '09:00', timeZone: 'UTC' },
+      provider: 'provider-route', model: 'model-id', reasoningEffort: 'opaque-effort',
+      permissionPreset: 'read-only',
+    },
+    {
+      name: 'Model target', prompt: 'Inspect one condition.',
+      schedule: { kind: 'daily', time: '09:00', timeZone: 'UTC' },
+      provider: null, model: null, permissionPreset: 'read-only',
+    },
+  ])
+
+  const partial = await handler?.('create', {
+    ...base,
+    input: { ...base.input, provider: 'provider-only' },
+  }, signal) as { readonly ok: boolean; readonly error?: { readonly code: string } }
+  assert.equal(partial.ok, false)
+  assert.equal(partial.error?.code, 'bad-request')
+  assert.equal(calls.length, 3)
+})
+
 test('update RPC replaces editable fields behind an expected revision guard', async () => {
   let handler: ((endpoint: string, payload: unknown, signal: AbortSignal) => Promise<unknown>) | undefined
   const calls: Array<{ scope: unknown; id: string; input: unknown; signal: AbortSignal | undefined }> = []
@@ -153,6 +254,9 @@ test('update RPC replaces editable fields behind an expected revision guard', as
       prompt: 'The complete edited prompt.',
       schedule: { kind: 'weekly', time: '09:15', weekdays: [1, 5] },
       timeZone: 'Asia/Shanghai',
+      provider: 'provider-route',
+      model: 'model-id',
+      reasoningEffort: 'opaque-effort',
       permission: 'workspace-write',
     },
   }, signal)
@@ -165,6 +269,9 @@ test('update RPC replaces editable fields behind an expected revision guard', as
       expectedRevision: 3,
       name: 'Edited task',
       prompt: 'The complete edited prompt.',
+      provider: 'provider-route',
+      model: 'model-id',
+      reasoningEffort: 'opaque-effort',
       schedule: { kind: 'weekly', time: '09:15', weekdays: ['MO', 'FR'], timeZone: 'Asia/Shanghai' },
       permissionPreset: 'workspace-write',
     },
