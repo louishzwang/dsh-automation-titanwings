@@ -33,6 +33,37 @@ function optionalString(value: unknown, label: string): string | undefined {
   return value === undefined ? undefined : string(value, label)
 }
 
+function optionalNullableString(value: unknown, label: string): string | null | undefined {
+  if (value === undefined || value === null) return value
+  return string(value, label)
+}
+
+function modelFields(
+  input: Record<string, unknown>,
+  create: boolean,
+): { readonly provider?: string | null; readonly model?: string | null; readonly reasoningEffort?: string | null } {
+  const provider = optionalNullableString(input.provider, 'input.provider')
+  const model = optionalNullableString(input.model, 'input.model')
+  const reasoningEffort = optionalNullableString(input.reasoningEffort, 'input.reasoningEffort')
+  const providerSpecified = provider !== undefined
+  const modelSpecified = model !== undefined
+  if (providerSpecified !== modelSpecified) throw new Error('input.provider and input.model must be provided together')
+  if (providerSpecified && ((provider === null) !== (model === null))) {
+    throw new Error('input.provider and input.model must both be strings or both be null')
+  }
+  if (reasoningEffort !== undefined && reasoningEffort !== null && providerSpecified && provider === null) {
+    throw new Error('input.reasoningEffort requires a pinned provider and model')
+  }
+  if (create && reasoningEffort !== undefined && !providerSpecified) {
+    throw new Error('input.reasoningEffort requires an explicit provider and model')
+  }
+  return {
+    ...(provider === undefined ? {} : { provider }),
+    ...(model === undefined ? {} : { model }),
+    ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
+  }
+}
+
 function integer(value: unknown, label: string): number {
   if (typeof value !== 'number' || !Number.isSafeInteger(value)) throw new Error(`${label} must be an integer`)
   return value
@@ -95,7 +126,7 @@ function errorResult(
     }
   }
   const message = error instanceof Error ? error.message : String(error)
-  const badRequest = /must|required|unknown automation|another workspace|scheduled in the future|already has a queued or running run|not registered|requires a live source session|has no workspace|request was cancelled|changed since it was opened/.test(message)
+  const badRequest = /must|required|unknown automation|another workspace|scheduled in the future|already has a queued or running run|not registered|requires a live source session|requires an explicit provider|requires a pinned provider|has no workspace|request was cancelled|changed since it was opened/.test(message)
   return {
     ok: false,
     error: {
@@ -129,6 +160,9 @@ async function snapshotValue(service: AutomationService, payload: Record<string,
       // Kept for wire compatibility; the Client localizes the structured schedule.
       scheduleSummary: definition.rrule,
       timeZone: definition.timeZone,
+      provider: definition.provider,
+      model: definition.model,
+      reasoningEffort: definition.reasoningEffort,
       permission: definition.permissionPreset,
       ...(definition.nextRunAt === null ? {} : { nextRunAt: definition.nextRunAt }),
       ...(definition.lastRun === null ? {} : {
@@ -169,6 +203,7 @@ export function registerAutomationRpc(ctx: RpcContext, service: AutomationServic
         case 'create': {
           const input = record(payload.input, 'input')
           const timeZone = string(input.timeZone, 'input.timeZone')
+          const target = modelFields(input, true)
           const permission = input.permission === undefined ? 'read-only' : string(input.permission, 'input.permission')
           if (permission !== 'read-only' && permission !== 'workspace-write') {
             throw new Error('input.permission must be read-only or workspace-write')
@@ -177,6 +212,7 @@ export function registerAutomationRpc(ctx: RpcContext, service: AutomationServic
             name: string(input.name, 'input.name'),
             prompt: string(input.prompt, 'input.prompt'),
             schedule: toDomainSchedule(input.schedule, timeZone),
+            ...target,
             permissionPreset: permission,
           }, signal)
           return { ok: true, value: { id: value.id, revision: value.revision } }
@@ -189,12 +225,16 @@ export function registerAutomationRpc(ctx: RpcContext, service: AutomationServic
             name?: string
             prompt?: string
             schedule?: DomainSchedule
+            provider?: string | null
+            model?: string | null
+            reasoningEffort?: string | null
             permissionPreset?: 'read-only' | 'workspace-write'
           } = {
             expectedRevision: positiveInteger(payload.expectedRevision, 'expectedRevision'),
           }
           if (input.name !== undefined) value.name = string(input.name, 'input.name')
           if (input.prompt !== undefined) value.prompt = string(input.prompt, 'input.prompt')
+          Object.assign(value, modelFields(input, false))
           if (input.schedule !== undefined) {
             const timeZone = string(input.timeZone, 'input.timeZone')
             value.schedule = toDomainSchedule(input.schedule, timeZone)

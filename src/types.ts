@@ -65,6 +65,7 @@ export interface AutomationDefinition {
   readonly agentPreset: string
   readonly provider: string | null
   readonly model: string | null
+  readonly reasoningEffort: string | null
   readonly permissionPreset: PermissionPreset
   readonly createdBy: AutomationCreator
   readonly createdAt: string
@@ -77,6 +78,7 @@ export interface AutomationTargetSnapshot {
   readonly agentPreset: string
   readonly provider: string | null
   readonly model: string | null
+  readonly reasoningEffort: string | null
   readonly permissionPreset: PermissionPreset
 }
 
@@ -114,6 +116,7 @@ export interface CreateAutomationInput {
   readonly agentPreset: string
   readonly provider?: string | null
   readonly model?: string | null
+  readonly reasoningEffort?: string | null
   readonly permissionPreset?: PermissionPreset
   readonly createdBy: AutomationCreator
   readonly now: string
@@ -127,6 +130,7 @@ export interface UpdateAutomationInput {
   readonly agentPreset?: string
   readonly provider?: string | null
   readonly model?: string | null
+  readonly reasoningEffort?: string | null
   readonly permissionPreset?: PermissionPreset
   readonly now: string
 }

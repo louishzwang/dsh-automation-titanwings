@@ -1,5 +1,5 @@
 import type { Translate } from './contracts.js';
-import type { AutomationSchedule, AutomationSnapshot, AutomationViewModel, CreateAutomationInput, UpdateAutomationInput } from './protocol.js';
+import type { AutomationSchedule, AutomationSnapshot, AutomationViewModel, CreateAutomationInput, ModelCatalog, ModelReasoningEffort, UpdateAutomationInput } from './protocol.js';
 export type ScheduleKind = 'once' | 'interval' | 'daily' | 'weekly';
 export interface AutomationFormState {
     readonly name: string;
@@ -11,9 +11,12 @@ export interface AutomationFormState {
     readonly time: string;
     readonly weekdays: readonly number[];
     readonly timeZone: string;
+    readonly provider: string | null;
+    readonly model: string | null;
+    readonly reasoningEffort: string | null;
     readonly permission: CreateAutomationInput['permission'];
 }
-export type FormErrorKey = 'form.error.name' | 'form.error.prompt' | 'form.error.once' | 'form.error.interval' | 'form.error.weekdays';
+export type FormErrorKey = 'form.error.name' | 'form.error.prompt' | 'form.error.once' | 'form.error.interval' | 'form.error.weekdays' | 'form.error.model';
 export declare class AutomationFormError extends Error {
     readonly key: FormErrorKey;
     constructor(key: FormErrorKey);
@@ -25,6 +28,21 @@ export declare function formStateFromAutomation(automation: AutomationViewModel)
 export declare function buildCreateInput(form: AutomationFormState, now?: Date): CreateAutomationInput;
 /** Return only changed fields so editing a completed one-shot does not resubmit its past schedule. */
 export declare function buildUpdateInput(form: AutomationFormState, automation: AutomationViewModel, now?: Date): UpdateAutomationInput;
+export interface ModelRouteChoice {
+    readonly provider: string;
+    readonly providerName: string;
+    readonly model: string;
+    readonly modelName: string;
+    readonly description?: string;
+    readonly unavailable: boolean;
+}
+/** Flatten successful groups and retain the current pinned route when it disappeared. */
+export declare function modelRouteChoices(catalog: ModelCatalog, currentProvider: string | null, currentModel: string | null): readonly ModelRouteChoice[];
+export interface ReasoningEffortChoice extends ModelReasoningEffort {
+    readonly unavailable: boolean;
+}
+/** Use exact-model opaque effort ids and retain an unavailable current pin. */
+export declare function reasoningEffortChoices(catalog: ModelCatalog, provider: string | null, model: string | null, currentEffort: string | null): readonly ReasoningEffortChoice[];
 export interface OverviewStats {
     readonly total: number;
     readonly active: number;

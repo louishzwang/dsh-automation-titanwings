@@ -80,13 +80,19 @@ DSH Core Schedule 适合当前对话里的 reminder，例如“十分钟后回�
 
 ![创建自动化：设置计划、时区与权限边界](docs/02-create-zh.png)
 
+### 🧠 每条自动化独立选择模型
+
+Web 表单既可以跟随运行时的全局模型，也可以固定一组 provider/model。固定模型时，可以使用该模型自己的默认推理程度，或选择这个模型实际公布的 opaque effort 值。规则卡片会显示保存的目标，每次 run 的不可变快照也会保留同一目标。
+
+Agent tools 暴露相同字段。创建时完全省略模型字段，会兼容旧行为并捕获创建 Session 的完整选择；把 `provider` 和 `model` 显式设为 `null`，则在每次运行时读取当时的全局选择。更新时，省略表示保持不变，`null` 表示清除固定值；换模型但不指定 effort 时，会回到新模型的默认值。
+
 ### 🧼 每次都有干净的执行边界
 
 每个真正 dispatch 的 occurrence 都会获得：
 
 - 一个新的 Session ID 和 fresh root Agent；
 - 保存的 prompt，而不是来源对话的历史；
-- 创建时捕获的 workspace、cwd、Agent preset、model target 与 permission preset；
+- 创建时捕获的 workspace、cwd、Agent preset 与 permission preset，以及一份持久 model target：它可以跟随运行时全局选择，也可以固定模型和可选的推理程度；
 - 明确的 `automation` message source，包含 automation ID、run ID 与 scheduled time；
 - 从真实 DSH turn end 派生的最终结果，而不是把“消息已经送达”误报成成功。
 
@@ -146,7 +152,7 @@ pnpm dsh plugin --profile web add /absolute/path/to/dsh-automation
 
 1. 打开一个已经连接目标 workspace 的 Session。
 2. 从侧栏打开**自动化**，或在 Chat 和 Trajectory 旁选择它。如果新建对话页仍是空白状态，请先开始对话。
-3. 填写可以独立理解的任务、schedule、IANA timezone 和 permission boundary。
+3. 填写可以独立理解的任务、schedule、IANA timezone、model target 和 permission boundary。
 4. 正式依赖定时运行前，先点一次**立即运行**，检查结果 Session 和 run record。
 
 ### 💬 让 Agent 设置
@@ -161,9 +167,9 @@ pnpm dsh plugin --profile web add /absolute/path/to/dsh-automation
 
 | Tool | 用途 |
 | --- | --- |
-| `automation_create` | 创建绑定当前 workspace 的 standalone rule。 |
+| `automation_create` | 创建绑定当前 workspace 的 standalone rule，并可固定模型和推理程度。 |
 | `automation_list` | 读取规则、下次 occurrence 和最近历史。 |
-| `automation_update` | 修改名称、prompt、cadence、permission 或 active/paused 状态。 |
+| `automation_update` | 修改名称、prompt、cadence、model target、permission 或 active/paused 状态。 |
 | `automation_run_now` | 使用相同边界排队一次 manual occurrence。 |
 | `automation_runs` | 读取有限数量的 run history、error、summary 与 Session ID。 |
 | `automation_delete` | 删除 definition，同时保留 durable run records。 |

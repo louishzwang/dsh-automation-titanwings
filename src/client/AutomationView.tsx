@@ -9,6 +9,8 @@ import {
   formatSchedule,
   formatRelativeTime,
   formStateFromAutomation,
+  modelRouteChoices,
+  reasoningEffortChoices,
   shortSessionId,
   type AutomationFormState,
   type ScheduleKind,
@@ -31,6 +33,7 @@ import type {
   AutomationRunViewModel,
   AutomationViewModel,
   CreateAutomationInput,
+  ModelCatalog,
   UpdateAutomationInput,
 } from './protocol.js'
 
@@ -75,6 +78,7 @@ function RunStatusBadge({ status, t }: { status: AutomationRunStatus; t: Transla
 interface FormCommonProps {
   readonly t: Translate
   readonly busy: boolean
+  readonly loadModelCatalog: () => Promise<ModelCatalog>
   readonly onCancel: () => void
 }
 
@@ -88,11 +92,31 @@ type AutomationFormProps = FormCommonProps & ({
 })
 
 function AutomationForm(props: AutomationFormProps): JSX.Element {
-  const { t, busy, onCancel } = props
+  const { t, busy, loadModelCatalog, onCancel } = props
   const [form, setForm] = useState<AutomationFormState>(() => props.mode === 'create'
     ? defaultFormState()
     : formStateFromAutomation(props.automation))
   const [validationError, setValidationError] = useState<string>()
+  const [catalog, setCatalog] = useState<ModelCatalog>({ groups: [], failures: [] })
+  const [catalogError, setCatalogError] = useState<string>()
+  const [catalogLoading, setCatalogLoading] = useState(true)
+  const [catalogGeneration, setCatalogGeneration] = useState(0)
+
+  useEffect(() => {
+    let live = true
+    setCatalogLoading(true)
+    setCatalogError(undefined)
+    void loadModelCatalog().then((value) => {
+      if (!live) return
+      setCatalog(value)
+      setCatalogLoading(false)
+    }, (error: unknown) => {
+      if (!live) return
+      setCatalogError(error instanceof Error ? error.message : String(error))
+      setCatalogLoading(false)
+    })
+    return () => { live = false }
+  }, [catalogGeneration, loadModelCatalog])
 
   const update = <Key extends keyof AutomationFormState>(key: Key, value: AutomationFormState[Key]): void => {
     setForm(current => ({ ...current, [key]: value }))
@@ -103,6 +127,39 @@ function AutomationForm(props: AutomationFormProps): JSX.Element {
       ? form.weekdays.filter(value => value !== day)
       : [...form.weekdays, day])
   }
+  const updateModel = (provider: string | null, model: string | null): void => {
+    setForm(current => ({
+      ...current,
+      provider,
+      model,
+      reasoningEffort: current.provider === provider && current.model === model
+        ? current.reasoningEffort
+        : null,
+    }))
+    setValidationError(undefined)
+  }
+  const routeKey = (provider: string, model: string): string => JSON.stringify([provider, model])
+  const modelChoices = modelRouteChoices(catalog, form.provider, form.model)
+  const unavailableModel = modelChoices.find(choice => choice.unavailable)
+  const effortChoices = reasoningEffortChoices(
+    catalog,
+    form.provider,
+    form.model,
+    form.reasoningEffort,
+  )
+  const selectedCatalogModel = form.provider === null || form.model === null
+    ? undefined
+    : catalog.groups
+      .find(group => group.id === form.provider)
+      ?.models.find(model => model.id === form.model)
+  const defaultEffort = selectedCatalogModel?.reasoning?.defaultEffort
+  const defaultEffortName = defaultEffort === undefined
+    ? undefined
+    : selectedCatalogModel?.reasoning?.efforts.find(effort => effort.id === defaultEffort)?.name
+      ?? defaultEffort
+  const selectedEffort = form.reasoningEffort === null
+    ? undefined
+    : effortChoices.find(choice => choice.id === form.reasoningEffort)
   const submit = (event: FormEvent): void => {
     event.preventDefault()
     try {
@@ -143,6 +200,84 @@ function AutomationForm(props: AutomationFormProps): JSX.Element {
           <span>{t('form.prompt')}</span>
           <textarea value={form.prompt} maxLength={12_000} rows={props.mode === 'edit' ? 8 : 4} placeholder={t('form.promptPlaceholder')} onChange={event => update('prompt', event.currentTarget.value)} />
         </label>
+
+        <label className="dsh-automation-field">
+          <span>{t('form.model')}</span>
+          <select
+            value={form.provider === null || form.model === null ? '' : routeKey(form.provider, form.model)}
+            onChange={(event) => {
+              const value = event.currentTarget.value
+              if (value === '') {
+                updateModel(null, null)
+                return
+              }
+              const choice = modelChoices.find(item => routeKey(item.provider, item.model) === value)
+              if (choice !== undefined) updateModel(choice.provider, choice.model)
+            }}
+          >
+            <option value="">{t('form.followGlobal')}</option>
+            {unavailableModel !== undefined && (
+              <option value={routeKey(unavailableModel.provider, unavailableModel.model)}>
+                {t('form.currentUnavailable', {
+                  provider: unavailableModel.provider,
+                  model: unavailableModel.model,
+                })}
+              </option>
+            )}
+            {catalog.groups.map(group => (
+              <optgroup key={group.id} label={group.name}>
+                {group.models.map(model => (
+                  <option key={model.id} value={routeKey(group.id, model.id)}>{model.name}</option>
+                ))}
+              </optgroup>
+            ))}
+          </select>
+          <small>{form.provider === null ? t('form.followGlobalHint') : t('form.pinnedModelHint')}</small>
+        </label>
+
+        <label className="dsh-automation-field">
+          <span>{t('form.reasoningEffort')}</span>
+          <select
+            value={form.reasoningEffort ?? ''}
+            disabled={form.provider === null}
+            onChange={event => update('reasoningEffort', event.currentTarget.value === '' ? null : event.currentTarget.value)}
+          >
+            <option value="">
+              {defaultEffortName === undefined
+                ? t('form.modelDefault')
+                : t('form.modelDefaultValue', { effort: defaultEffortName })}
+            </option>
+            {effortChoices.map(effort => (
+              <option key={effort.id} value={effort.id}>
+                {effort.unavailable
+                  ? t('form.effortUnavailable', { effort: effort.name })
+                  : effort.name}
+              </option>
+            ))}
+          </select>
+          <small>{form.provider === null
+            ? t('form.reasoningFollowGlobal')
+            : selectedEffort?.description ?? t('form.reasoningHint')}</small>
+        </label>
+
+        {(catalogLoading || catalogError !== undefined || catalog.failures.length > 0) && (
+          <div className="dsh-automation-catalog-status dsh-automation-field--wide" role="status">
+            {catalogLoading && <span>{t('form.catalogLoading')}</span>}
+            {catalogError !== undefined && (
+              <span className="is-error">{t('form.catalogError', { message: catalogError })}</span>
+            )}
+            {catalog.failures.map(failure => (
+              <span className="is-warning" key={failure.id}>
+                {t('form.catalogFailure', { provider: failure.name, message: failure.message })}
+              </span>
+            ))}
+            {!catalogLoading && (catalogError !== undefined || catalog.failures.length > 0) && (
+              <button type="button" onClick={() => setCatalogGeneration(value => value + 1)}>
+                {t('form.catalogRetry')}
+              </button>
+            )}
+          </div>
+        )}
 
         <fieldset className="dsh-automation-fieldset dsh-automation-field--wide">
           <legend>{t('form.schedule')}</legend>
@@ -255,6 +390,15 @@ function AutomationCard(props: AutomationCardProps): JSX.Element {
             <div className="dsh-automation-card-badges">
               <AutomationStatusBadge status={automation.status} t={t} />
               <span className="dsh-automation-permission-badge"><ShieldIcon />{t(`card.permission.${automation.permission}`)}</span>
+              <span className="dsh-automation-model-badge">
+                {automation.provider === null || automation.model === null
+                  ? t('card.modelGlobal')
+                  : t('card.modelPinned', {
+                      provider: automation.provider,
+                      model: automation.model,
+                      effort: automation.reasoningEffort ?? t('form.modelDefault'),
+                    })}
+              </span>
             </div>
           </div>
         </div>
@@ -361,7 +505,8 @@ export function RecentRun({ run, now, t, busy, onOpen, onMarkRead }: {
 
 /** Native conversation view: all data and effects arrive through the slot's four shares. */
 export function AutomationView({
-  t, useAutomationState, refresh, createAutomation, updateAutomation, mutateAutomation, runNow, markRunRead, openSession,
+  t, useAutomationState, refresh, createAutomation, updateAutomation, mutateAutomation, runNow, markRunRead,
+  loadModelCatalog, openSession,
 }: AutomationViewProps): JSX.Element {
   const state = useAutomationState(value => value)
   const [showCreate, setShowCreate] = useState(false)
@@ -477,7 +622,14 @@ export function AutomationView({
       </div>
 
       {showCreate && (
-        <AutomationForm mode="create" t={t} busy={busyKey === actionKey('create')} onCancel={() => setShowCreate(false)} onSubmit={onCreate} />
+        <AutomationForm
+          mode="create"
+          t={t}
+          busy={busyKey === actionKey('create')}
+          loadModelCatalog={loadModelCatalog}
+          onCancel={() => setShowCreate(false)}
+          onSubmit={onCreate}
+        />
       )}
 
       {editingAutomation !== undefined && (
@@ -487,6 +639,7 @@ export function AutomationView({
           automation={editingAutomation}
           t={t}
           busy={busyKey === actionKey('update', editingAutomation.id)}
+          loadModelCatalog={loadModelCatalog}
           onCancel={() => setEditingAutomation(undefined)}
           onSubmit={onUpdate}
         />

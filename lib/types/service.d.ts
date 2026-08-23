@@ -13,6 +13,9 @@ export interface CreateRequest {
     readonly name: string;
     readonly prompt: string;
     readonly schedule: AutomationSchedule;
+    readonly provider?: string | null;
+    readonly model?: string | null;
+    readonly reasoningEffort?: string | null;
     readonly permissionPreset?: PermissionPreset;
 }
 export interface AutomationScope {

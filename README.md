@@ -81,13 +81,19 @@ Create a one-shot, fixed-interval, daily, or weekly rule. Daily and weekly sched
 
 ![Create form with schedule, time zone, and permission boundary](docs/02-create-en.png)
 
+### 🧠 A model target for each automation
+
+The Web form can follow the live global model or pin one provider/model pair. A pinned model can use its own default reasoning effort or one of the opaque effort values advertised by that exact model. The card shows the saved target, and each run keeps the same target in its immutable snapshot.
+
+Agent tools expose the same fields. Omitting all model fields on create preserves the existing behavior of capturing the creating Session's complete selection; explicitly setting `provider` and `model` to `null` follows the live global selection at run time. On update, omitted fields stay unchanged, `null` clears a pin, and changing the route without an effort resets to the new model's default.
+
 ### 🧼 A clean execution boundary every time
 
 Each dispatched occurrence receives:
 
 - a new Session ID and fresh root Agent;
 - the saved prompt, not the source conversation history;
-- the captured workspace, cwd, Agent preset, model target, and permission preset;
+- the captured workspace, cwd, Agent preset, permission preset, and a durable model target that either follows the live global selection or pins one model and optional reasoning effort;
 - an explicit `automation` message source containing the automation ID, run ID, and scheduled time;
 - a terminal result derived from the actual DSH turn end, not merely “message delivered.”
 
@@ -147,7 +153,7 @@ package build script and needs no `allowBuilds` entry.
 
 1. Open a Session attached to the workspace you want to automate.
 2. Open **Automations** from the sidebar, or select it next to Chat and Trajectory. If the New Session screen is still blank, start the conversation first.
-3. Enter a self-contained task, schedule, IANA time zone, and permission boundary.
+3. Enter a self-contained task, schedule, IANA time zone, model target, and permission boundary.
 4. Use **Run now** once before relying on the schedule; inspect the resulting Session and run record.
 
 ### 💬 Ask an Agent
@@ -162,9 +168,9 @@ evidence, identify regressions, and return a short report. Do not modify files.
 
 | Tool | Purpose |
 | --- | --- |
-| `automation_create` | Create a workspace-bound standalone rule. |
+| `automation_create` | Create a workspace-bound standalone rule, optionally with a pinned model and reasoning effort. |
 | `automation_list` | Read rules, next occurrences, and recent history. |
-| `automation_update` | Change name, prompt, cadence, permission, or active/paused state. |
+| `automation_update` | Change name, prompt, cadence, model target, permission, or active/paused state. |
 | `automation_run_now` | Queue one manual occurrence with the same boundary. |
 | `automation_runs` | Read bounded run history, errors, summaries, and Session IDs. |
 | `automation_delete` | Delete the definition while retaining durable run records. |

@@ -33,6 +33,21 @@ export declare const en: {
     readonly 'form.namePlaceholder': "Daily regression triage";
     readonly 'form.prompt': "Task prompt";
     readonly 'form.promptPlaceholder': "Review new test failures, identify the regression, and propose the smallest verified fix…";
+    readonly 'form.model': "Model";
+    readonly 'form.followGlobal': "Follow global";
+    readonly 'form.followGlobalHint': "Resolve the live global selection when each run starts.";
+    readonly 'form.pinnedModelHint': "Keep this automation on the selected provider and model.";
+    readonly 'form.currentUnavailable': "Current (unavailable) · {provider}/{model}";
+    readonly 'form.reasoningEffort': "Reasoning effort";
+    readonly 'form.modelDefault': "Model default";
+    readonly 'form.modelDefaultValue': "Model default ({effort})";
+    readonly 'form.effortUnavailable': "Current (unavailable) · {effort}";
+    readonly 'form.reasoningFollowGlobal': "Reasoning follows the global selection.";
+    readonly 'form.reasoningHint': "Options are supplied by the selected model.";
+    readonly 'form.catalogLoading': "Loading model catalog…";
+    readonly 'form.catalogError': "Model catalog unavailable: {message}";
+    readonly 'form.catalogFailure': "Could not load {provider}: {message}";
+    readonly 'form.catalogRetry': "Retry model catalog";
     readonly 'form.schedule': "Schedule";
     readonly 'form.once': "Once";
     readonly 'form.interval': "Interval";
@@ -59,6 +74,7 @@ export declare const en: {
     readonly 'form.error.once': "Choose a valid future date and time.";
     readonly 'form.error.interval': "Interval must be between 5 and 43,200 minutes.";
     readonly 'form.error.weekdays': "Select at least one day.";
+    readonly 'form.error.model': "Choose Follow global or a complete provider and model target.";
     readonly 'day.1': "Mon";
     readonly 'day.2': "Tue";
     readonly 'day.3': "Wed";
@@ -80,6 +96,8 @@ export declare const en: {
     readonly 'card.never': "Never run";
     readonly 'card.permission.read-only': "Read only";
     readonly 'card.permission.workspace-write': "Workspace write";
+    readonly 'card.modelGlobal': "Follow global";
+    readonly 'card.modelPinned': "{provider}/{model} · {effort}";
     readonly 'schedule.onceAt': "Once · {time}";
     readonly 'schedule.everyMinutes': "Every {count} minutes";
     readonly 'schedule.dailyAt': "Daily · {time}";

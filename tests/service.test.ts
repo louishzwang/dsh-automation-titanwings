@@ -104,7 +104,9 @@ async function harness(seed?: {
     ctx: {},
     session: {
       header: { cwd: workspace.path, agentPreset: 'legacy-preset' },
-      requestHeader: () => ({ config: { provider: 'current-provider', model: 'current-model' } }),
+      requestHeader: () => ({
+        config: { provider: 'current-provider', model: 'current-model', reasoningEffort: 'source-effort' },
+      }),
     },
   }
   const otherSourceAgent = {
@@ -112,7 +114,9 @@ async function harness(seed?: {
     ctx: {},
     session: {
       header: { cwd: otherWorkspace.path, agentPreset: 'legacy-preset' },
-      requestHeader: () => ({ config: { provider: 'current-provider', model: 'current-model' } }),
+      requestHeader: () => ({
+        config: { provider: 'current-provider', model: 'current-model', reasoningEffort: 'source-effort' },
+      }),
     },
   }
   let liveSourceAgent: typeof sourceAgent | undefined = sourceAgent
@@ -165,7 +169,9 @@ async function harness(seed?: {
         return { agent: runAgent, dispose: async () => {} }
       },
     },
-    agentDefaultModel: { currentSelection: () => ({ provider: 'provider', model: 'model' }) },
+    agentDefaultModel: {
+      currentSelection: () => ({ provider: 'provider', model: 'model', reasoningEffort: 'default-effort' }),
+    },
     agentPresets: {
       mount: async () => ({ id: 'standard' }),
       composedPreset: () => 'code',
@@ -206,8 +212,59 @@ test('run now admits at most one queued or running occurrence per automation', a
   assert.equal(definition.agentPreset, 'code')
   assert.equal(definition.provider, 'current-provider')
   assert.equal(definition.model, 'current-model')
+  assert.equal(definition.reasoningEffort, 'source-effort')
   assert.equal(first.status, 'queued')
   await assert.rejects(() => service.runNow(scope, definition.id), /queued or running/)
+  await service.dispose()
+})
+
+test('create distinguishes legacy capture, explicit pinning, and live-global targets', async () => {
+  const { service } = await harness()
+  const request = {
+    name: 'Model target',
+    prompt: 'Inspect one bounded condition.',
+    schedule: { kind: 'daily' as const, time: '09:00', timeZone: 'UTC' },
+  }
+
+  const captured = await service.create(scope, request)
+  assert.deepEqual(
+    { provider: captured.provider, model: captured.model, reasoningEffort: captured.reasoningEffort },
+    { provider: 'current-provider', model: 'current-model', reasoningEffort: 'source-effort' },
+  )
+
+  const pinned = await service.create(scope, {
+    ...request,
+    name: 'Pinned model target',
+    provider: 'provider-route',
+    model: 'model-id',
+    reasoningEffort: 'adapter-owned-effort',
+  })
+  assert.deepEqual(
+    { provider: pinned.provider, model: pinned.model, reasoningEffort: pinned.reasoningEffort },
+    { provider: 'provider-route', model: 'model-id', reasoningEffort: 'adapter-owned-effort' },
+  )
+
+  const followsGlobal = await service.create(scope, {
+    ...request,
+    name: 'Live global target',
+    provider: null,
+    model: null,
+  })
+  assert.deepEqual(
+    { provider: followsGlobal.provider, model: followsGlobal.model, reasoningEffort: followsGlobal.reasoningEffort },
+    { provider: null, model: null, reasoningEffort: null },
+  )
+
+  await assert.rejects(() => service.create(scope, {
+    ...request,
+    name: 'Partial target',
+    provider: 'provider-route',
+  }), /provided together/)
+  await assert.rejects(() => service.create(scope, {
+    ...request,
+    name: 'Effort without route',
+    reasoningEffort: 'high',
+  }), /explicit provider/)
   await service.dispose()
 })
 

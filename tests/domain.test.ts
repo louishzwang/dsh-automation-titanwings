@@ -28,10 +28,145 @@ test('creation derives canonical RRULE and rejects inconsistent stored records',
   const value = definition()
   assert.equal(value.revision, 1)
   assert.equal(value.timeZone, 'Asia/Shanghai')
+  assert.equal(value.reasoningEffort, null)
   assert.match(value.rrule, /FREQ=DAILY/)
   assert.equal(automationDefinitionSchema.safeParse(value).success, true)
   assert.equal(automationDefinitionSchema.safeParse({ ...value, rrule: 'RRULE:FREQ=HOURLY' }).success, false)
   assert.equal(automationDefinitionSchema.safeParse({ ...value, timeZone: 'Europe/Paris' }).success, false)
+})
+
+test('legacy version-one records default a missing reasoning effort to null', () => {
+  const current = definition()
+  const { reasoningEffort: _definitionEffort, ...legacyDefinition } = current
+  const parsedDefinition = automationDefinitionSchema.parse(legacyDefinition)
+  assert.equal(parsedDefinition.reasoningEffort, null)
+
+  const run = createManualRun(current, '2026-08-13T01:00:00Z', 'legacy-run')
+  const { reasoningEffort: _runEffort, ...legacyTarget } = run.targetSnapshot
+  const parsedRun = automationRunSchema.parse({ ...run, targetSnapshot: legacyTarget })
+  assert.equal(parsedRun.targetSnapshot.reasoningEffort, null)
+})
+
+test('model targets are paired and reasoning requires a pinned route', () => {
+  const base = {
+    id: 'automation-model-target',
+    name: 'Model target',
+    prompt: 'Inspect one condition.',
+    schedule: { kind: 'daily' as const, time: '09:00', timeZone: 'UTC' },
+    workspaceId: 'workspace-1',
+    cwd: '/workspace/repo',
+    agentPreset: 'coding',
+    createdBy: { kind: 'agent' as const, sessionId: 'session-source' },
+    now: '2026-08-13T00:00:00Z',
+  }
+  assert.throws(() => createDefinition({ ...base, provider: 'route' }), /provider and model/)
+  assert.throws(() => createDefinition({ ...base, reasoningEffort: 'high' }), /requires a pinned/)
+
+  const pinned = createDefinition({
+    ...base,
+    provider: 'route',
+    model: 'analysis-model',
+    reasoningEffort: 'opaque-effort',
+  })
+  assert.equal(pinned.reasoningEffort, 'opaque-effort')
+  const run = createManualRun(pinned, '2026-08-13T01:00:00Z', 'pinned-run')
+  assert.deepEqual(run.targetSnapshot, {
+    workspaceId: 'workspace-1',
+    cwd: '/workspace/repo',
+    agentPreset: 'coding',
+    provider: 'route',
+    model: 'analysis-model',
+    reasoningEffort: 'opaque-effort',
+    permissionPreset: 'read-only',
+  })
+})
+
+test('model target identifiers remain opaque while all-whitespace values are rejected', () => {
+  const value = createDefinition({
+    id: 'automation-opaque-model-target',
+    name: 'Opaque model target',
+    prompt: 'Inspect one condition.',
+    schedule: { kind: 'daily', time: '09:00', timeZone: 'UTC' },
+    workspaceId: 'workspace-1',
+    cwd: '/workspace/repo',
+    agentPreset: 'coding',
+    provider: ' provider-route ',
+    model: ' model-id ',
+    reasoningEffort: ' adapter-owned-effort ',
+    createdBy: { kind: 'agent', sessionId: 'session-source' },
+    now: '2026-08-13T00:00:00Z',
+  })
+
+  assert.deepEqual(
+    { provider: value.provider, model: value.model, reasoningEffort: value.reasoningEffort },
+    {
+      provider: ' provider-route ',
+      model: ' model-id ',
+      reasoningEffort: ' adapter-owned-effort ',
+    },
+  )
+  const run = createManualRun(value, '2026-08-13T01:00:00Z', 'opaque-target-run')
+  assert.deepEqual(
+    {
+      provider: run.targetSnapshot.provider,
+      model: run.targetSnapshot.model,
+      reasoningEffort: run.targetSnapshot.reasoningEffort,
+    },
+    {
+      provider: ' provider-route ',
+      model: ' model-id ',
+      reasoningEffort: ' adapter-owned-effort ',
+    },
+  )
+  assert.throws(() => automationDefinitionSchema.parse({ ...value, reasoningEffort: '   ' }))
+})
+
+test('model route updates are atomic and clear stale reasoning by default', () => {
+  const pinned = createDefinition({
+    id: 'automation-model-update',
+    name: 'Model update',
+    prompt: 'Inspect one condition.',
+    schedule: { kind: 'daily', time: '09:00', timeZone: 'UTC' },
+    workspaceId: 'workspace-1',
+    cwd: '/workspace/repo',
+    agentPreset: 'coding',
+    provider: 'route-a',
+    model: 'model-a',
+    reasoningEffort: 'high',
+    createdBy: { kind: 'agent', sessionId: 'session-source' },
+    now: '2026-08-13T00:00:00Z',
+  })
+  assert.throws(() => updateDefinition(pinned, {
+    provider: 'route-b',
+    now: '2026-08-13T01:00:00Z',
+  }), /updated together/)
+
+  const changedRoute = updateDefinition(pinned, {
+    provider: 'route-b',
+    model: 'model-b',
+    now: '2026-08-13T01:00:00Z',
+  })
+  assert.equal(changedRoute.reasoningEffort, null)
+
+  const changedEffort = updateDefinition(changedRoute, {
+    reasoningEffort: 'custom-budget',
+    now: '2026-08-13T02:00:00Z',
+  })
+  assert.equal(changedEffort.reasoningEffort, 'custom-budget')
+
+  const followsGlobal = updateDefinition(changedEffort, {
+    provider: null,
+    model: null,
+    now: '2026-08-13T03:00:00Z',
+  })
+  assert.deepEqual(
+    { provider: followsGlobal.provider, model: followsGlobal.model, reasoningEffort: followsGlobal.reasoningEffort },
+    { provider: null, model: null, reasoningEffort: null },
+  )
+  assert.throws(() => updateDefinition(followsGlobal, {
+    reasoningEffort: 'high',
+    now: '2026-08-13T04:00:00Z',
+  }), /requires a pinned/)
 })
 
 test('update and status transitions are immutable, revisioned pure transforms', () => {

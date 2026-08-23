@@ -10,7 +10,7 @@ import { SessionId } from '@deepseek-ai/dsh-session'
 import { setApprovalPolicy } from '@deepseek-ai/dsh-user-approval'
 import { WorkspaceId } from '@deepseek-ai/dsh-workspace'
 import type { ToolExecution } from '@deepseek-ai/dsh-tools'
-import type { AutomationDefinition, AutomationRun } from './types.ts'
+import type { AutomationDefinition, AutomationRun, AutomationTargetSnapshot } from './types.ts'
 
 interface TextBlock { readonly type: string; readonly text?: string }
 interface SessionEventLike {
@@ -100,6 +100,19 @@ function reasonError(reason: Record<string, any> | undefined): { readonly code: 
   return { code: `turn_${String(reason.kind)}`, message: `The automation ended with ${String(reason.kind)}.` }
 }
 
+/** Resolve one run's immutable target without leaking an unrelated default effort into a pinned model. */
+export function modelSelectionForRun(
+  target: AutomationTargetSnapshot,
+  fallback: ModelSelection,
+): ModelSelection {
+  if (target.provider === null || target.model === null) return fallback
+  return {
+    provider: target.provider,
+    model: target.model,
+    ...(target.reasoningEffort === null ? {} : { reasoningEffort: target.reasoningEffort }),
+  }
+}
+
 /**
  * Execute exactly one durable run in a fresh root Agent. The new Session owns
  * no source-chat history or grant; policy and model selection are installed
@@ -127,9 +140,7 @@ export async function executeAutomationRun(
   // A definition either pins the complete provider/model pair captured from
   // the source Agent, or follows the live default as one coherent selection.
   // Do not combine the default model's reasoning effort with another model.
-  const selection: ModelSelection = target.provider !== null && target.model !== null
-    ? { provider: target.provider, model: target.model }
-    : fallbackSelection
+  const selection = modelSelectionForRun(target, fallbackSelection)
   const sessionId = SessionId(config.sessionId)
   let handle: Awaited<ReturnType<Context['agents']['create']>> | undefined
   let timeout: ReturnType<typeof setTimeout> | undefined

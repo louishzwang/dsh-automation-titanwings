@@ -86,7 +86,9 @@ flowchart LR
 }
 ```
 
-它不是 `source.kind = 'user'`。创建者、definition revision、prompt snapshot、scheduled occurrence 和最终 SessionId 都保留在 durable record 中。
+它不是 `source.kind = 'user'`。创建者、definition revision、prompt snapshot、完整 model target、scheduled occurrence 和最终 SessionId 都保留在 durable record 中。
+
+Model target 是一个不可拆分的 nullable triplet：`provider` 与 `model` 必须同时为 string 或同时为 `null`；`reasoningEffort` 是 adapter-owned opaque string，只能依附固定 route。Null pair 表示每次 dispatch 时读取完整 live global selection；固定 pair + null effort 表示使用该模型的默认推理配置；固定 triplet 表示精确复现该 effort。Catalog membership 只用于选择界面，不是持久化或执行前的强校验。
 
 ### 3.3 Schedule 不是授权
 
@@ -117,8 +119,9 @@ interface AutomationDefinition {
   workspaceId: string
   cwd: string
   agentPreset: string
-  provider?: string
-  model?: string
+  provider: string | null
+  model: string | null
+  reasoningEffort: string | null
   permissionPreset: 'read-only' | 'workspace-write'
   createdBy: { kind: 'agent' | 'web'; sessionId: string }
   createdAt: string
@@ -126,7 +129,7 @@ interface AutomationDefinition {
 }
 ```
 
-`nextRunAt` 是由 rule 和当前时间计算的 projection，不是第二份权威。每次更新递增 revision；已经开始的 run 始终保留当时的 prompt/target snapshot。
+`nextRunAt` 是由 rule 和当前时间计算的 projection，不是第二份权威。每次更新递增 revision；已经开始的 run 始终保留当时的 prompt/target snapshot。Durable version 仍为 1；读取 v0.1.6 的旧 definition 或 run snapshot 时，缺失的 `reasoningEffort` 规范化为 `null`，无需破坏性迁移。
 
 ### 4.2 AutomationRun
 
@@ -141,7 +144,15 @@ interface AutomationRun {
   scheduledFor: string
   status: 'queued' | 'running' | 'succeeded' | 'failed' | 'skipped' | 'cancelled'
   promptSnapshot: string
-  targetSnapshot: { workspaceId: string; cwd: string; agentPreset: string }
+  targetSnapshot: {
+    workspaceId: string
+    cwd: string
+    agentPreset: string
+    provider: string | null
+    model: string | null
+    reasoningEffort: string | null
+    permissionPreset: 'read-only' | 'workspace-write'
+  }
   sessionId?: string
   startedAt?: string
   finishedAt?: string
@@ -208,12 +219,13 @@ ctx.agents.withoutInitiator(() => ctx.agents.create({
   agentOptions: { provider, model },
   setup: async (agentCtx) => {
     await ctx.agentPresets.mount(agentCtx, agentPreset)
+    installModelSelection(agentCtx, { current: selection, assembled: undefined })
     // Pin current unattended policy before publication.
   },
 }))
 ```
 
-创建完成后先把 Session attach 到原 Workspace，再发送 automation-sourced prompt。`whenIdle()` 只能表示整个 Agent 静止，因此 MVP 刻意让一个 fresh Agent 只消费这一条 automation work；这样该 Agent 的第一段 consumed-work interval 就等于本次 run。
+Executor 从 run snapshot 解析一次完整 selection：null pair 原样采用 `agentDefaultModel.currentSelection()` 的 provider/model/effort；固定 pair 只携带自己的 optional effort，绝不把另一个全局模型的 effort 混进来。创建完成后先把 Session attach 到原 Workspace，再发送 automation-sourced prompt。`whenIdle()` 只能表示整个 Agent 静止，因此 MVP 刻意让一个 fresh Agent 只消费这一条 automation work；这样该 Agent 的第一段 consumed-work interval 就等于本次 run。
 
 结果从 durable turn/end 与最后一个 assistant message 派生，而不是把“消息已投递”误报为成功。
 
@@ -221,26 +233,26 @@ ctx.agents.withoutInitiator(() => ctx.agents.create({
 
 MVP 提供：
 
-- `automation_create`：在当前 Agent 的 workspace 创建独立规则；
+- `automation_create`：在当前 Agent 的 workspace 创建独立规则，可固定 provider/model/reasoning effort；
 - `automation_list`：列出当前 workspace 的规则和 next run；
-- `automation_update`：改名称、prompt、cadence 或 pause/resume；
+- `automation_update`：改名称、prompt、cadence、model target 或 pause/resume；
 - `automation_delete`：删除定义，保留 runs；
 - `automation_run_now`：创建 manual occurrence；
 - `automation_runs`：读取 bounded history。
 
-每个 mutation 只接受结构化参数，不接收 raw shell command。Agent 只能绑定自己的 canonical workspace，不能借参数越界到任意路径；`workspace-write` 必须显式选择。
+每个 mutation 只接受结构化参数，不接收 raw shell command。Agent 只能绑定自己的 canonical workspace，不能借参数越界到任意路径；`workspace-write` 必须显式选择。Create 省略整个 model target 时兼容旧客户端并捕获来源 Session 的完整 selection；显式 null pair 表示 follow live global。Update 的 undefined/null/string 分别表示保持、清除、固定；更换 route 而省略 effort 会清掉旧模型的 effort。
 
 ## 8. Web product
 
 Web client 注册一个 session-scoped `Automations` conversation view，并在 root-scoped `sidebar.footer.action` 注册快捷入口。快捷入口只在当前 Session 已挂载 conversation tabs 时切换到 `Automations`；DSH 的空白 Hero 没有 tab ring，此时入口显示本地化提示，不静默失败，也不创建一个仍然空白的伪 Session。
 
 - overview：Active / Paused / Needs attention / Runs；
-- rule cards：cadence、workspace、next run、last outcome；
-- create/edit：Once / Every / Daily / Weekly 的友好表单；
+- rule cards：cadence、model target、workspace、next run、last outcome；
+- create/edit：Once / Every / Daily / Weekly 的友好表单，以及 Follow global / provider / model / exact-route reasoning effort 选择；
 - actions：Pause/Resume、Run now、Delete；
 - run history：queued/running/succeeded/failed/skipped、时间、summary、SessionId。
 
-UI 不自己计算权威 due state；它通过 loopback-trusted Connection RPC 获取 Host snapshot。Client 卸载会移除 conversation view 与 sidebar action，不影响 durable rules。
+UI 不自己计算权威 due state；它通过 loopback-trusted Connection RPC 获取 Host snapshot，并通过 Host-scoped `llm.models({})` 读取 advisory catalog。单个 provider catalog 失败不会丢掉成功 groups；当前固定 route 或 effort 即使从 catalog 消失，编辑表单仍保留并标成 unavailable。Client 卸载会移除 conversation view 与 sidebar action，不影响 durable rules。
 
 ## 9. 非目标
 
@@ -259,7 +271,7 @@ MVP 不做：
 
 ## 10. 验收条件
 
-1. Agent 和 Web 都能创建、查看、暂停、恢复、更新、删除规则；
+1. Agent 和 Web 都能创建、查看、暂停、恢复、更新、删除规则，并能跟随全局模型或固定每条规则的 provider/model/reasoning effort；
 2. 到期后创建新的 root Session，source 明确是 automation；
 3. definition、run 和 run Session 在重启后仍可检查；
 4. 同一 occurrence 不会启动两次；overlap/misfire 有独立记录；

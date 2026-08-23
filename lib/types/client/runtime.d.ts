@@ -1,5 +1,5 @@
-import type { ClientRpc } from './contracts.js';
-import type { AutomationSnapshot, CreateAutomationInput, MutateRequest, UpdateAutomationInput } from './protocol.js';
+import type { ClientLlmApi, ClientRpc } from './contracts.js';
+import type { AutomationSnapshot, CreateAutomationInput, MutateRequest, UpdateAutomationInput, ModelCatalog } from './protocol.js';
 export interface AutomationClientState {
     readonly phase: 'idle' | 'loading' | 'ready' | 'error';
     readonly snapshot?: AutomationSnapshot;
@@ -20,5 +20,7 @@ export interface AutomationRuntime {
     markRunRead(runId: string): Promise<void>;
     openRunSession(runId: string, open: () => Promise<void>): Promise<void>;
 }
+/** Read the Host-wide catalog without discarding sound providers when peers fail. */
+export declare function loadModelCatalog(api: ClientLlmApi): Promise<ModelCatalog>;
 /** One session-scoped observable; the framework binds it into useAutomationState. */
 export declare function createAutomationRuntime(rpc: ClientRpc, sessionId: string): AutomationRuntime;

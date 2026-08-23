@@ -40,6 +40,9 @@ export interface CreateRequest {
   readonly name: string
   readonly prompt: string
   readonly schedule: AutomationSchedule
+  readonly provider?: string | null
+  readonly model?: string | null
+  readonly reasoningEffort?: string | null
   readonly permissionPreset?: PermissionPreset
 }
 
@@ -195,8 +198,27 @@ export class AutomationService {
       if (request.schedule.kind === 'once' && nextOccurrence(request.schedule, now) === null) {
         throw new Error('A one-time automation must be scheduled in the future.')
       }
-      const loggedSelection = resolved.agent.session.requestHeader()?.config
-      const selection = loggedSelection ?? this.ctx.agentDefaultModel.currentSelection()
+      const providerSpecified = request.provider !== undefined
+      const modelSpecified = request.model !== undefined
+      if (providerSpecified !== modelSpecified) throw new Error('provider and model must be provided together')
+      if (!providerSpecified && request.reasoningEffort !== undefined) {
+        throw new Error('reasoningEffort requires an explicit provider and model')
+      }
+      // Backward compatibility: an omitted pair captures the source Session's
+      // complete selection. An explicit null pair is the durable live-default marker.
+      const inheritedSelection = resolved.agent.session.requestHeader()?.config
+        ?? this.ctx.agentDefaultModel.currentSelection()
+      const selection = providerSpecified
+        ? {
+            provider: request.provider!,
+            model: request.model!,
+            reasoningEffort: request.reasoningEffort ?? null,
+          }
+        : {
+            provider: inheritedSelection.provider,
+            model: inheritedSelection.model,
+            reasoningEffort: inheritedSelection.reasoningEffort ?? null,
+          }
       const agentPreset = this.ctx.agentPresets.composedPreset(resolved.agent.ctx)
         ?? resolved.agent.session.header.agentPreset
         ?? 'standard'
@@ -210,6 +232,7 @@ export class AutomationService {
         agentPreset,
         provider: selection.provider,
         model: selection.model,
+        reasoningEffort: selection.reasoningEffort,
         permissionPreset: request.permissionPreset ?? 'read-only',
         createdBy: { kind: scope.creatorKind, sessionId: scope.sessionId },
         now,
