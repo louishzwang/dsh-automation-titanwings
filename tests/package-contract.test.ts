@@ -30,6 +30,7 @@ test('package keeps the installable DSH bundle and Web client contract', async (
     '@deepseek-ai/dsh-client-runtime',
     '@deepseek-ai/dsh-client-locale',
     '@deepseek-ai/dsh-client-ui-conversation',
+    '@deepseek-ai/dsh-client-ui-sidebar',
   ])
   assert.deepEqual(manifest.exports?.['./client'], {
     types: './lib/types/client/index.d.ts',

@@ -232,7 +232,7 @@ MVP 提供：
 
 ## 8. Web product
 
-Web client 注册一个 session-scoped `Automations` conversation view：
+Web client 注册一个 session-scoped `Automations` conversation view，并在 root-scoped `sidebar.footer.action` 注册快捷入口。快捷入口只在当前 Session 已挂载 conversation tabs 时切换到 `Automations`；DSH 的空白 Hero 没有 tab ring，此时入口显示本地化提示，不静默失败，也不创建一个仍然空白的伪 Session。
 
 - overview：Active / Paused / Needs attention / Runs；
 - rule cards：cadence、workspace、next run、last outcome；
@@ -240,7 +240,7 @@ Web client 注册一个 session-scoped `Automations` conversation view：
 - actions：Pause/Resume、Run now、Delete；
 - run history：queued/running/succeeded/failed/skipped、时间、summary、SessionId。
 
-UI 不自己计算权威 due state；它通过 loopback-trusted Connection RPC 获取 Host snapshot。Client 卸载只移除 tab，不影响 durable rules。
+UI 不自己计算权威 due state；它通过 loopback-trusted Connection RPC 获取 Host snapshot。Client 卸载会移除 conversation view 与 sidebar action，不影响 durable rules。
 
 ## 9. 非目标
 

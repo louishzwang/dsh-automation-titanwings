@@ -69,7 +69,7 @@ DSH Core Schedule 适合当前对话里的 reminder，例如“十分钟后回�
 
 ### 🕹️ 一个控制面，两种入口
 
-- **DSH Web：**使用对话里的**自动化** Tab 创建规则、暂停或恢复、立即运行、删除，并检查最近运行。
+- **DSH Web：**从侧栏或对话里的**自动化** Tab 打开控制面，创建规则、暂停或恢复、立即运行、删除，并检查最近运行。在空白的新建对话页里，侧栏入口会明确提示先开始对话，不再静默失效。
 - **任意符合条件的 root Agent：**直接用自然语言提出要求。六个 scoped tools 让 Agent 只能管理自己准确工作区内的 automation。
 
 不需要再维护一个独立 bot、daemon UI 或第三方 scheduler。
@@ -145,7 +145,7 @@ pnpm dsh plugin --profile web add /absolute/path/to/dsh-automation
 ### 🖥️ 从 DSH Web
 
 1. 打开一个已经连接目标 workspace 的 Session。
-2. 在 Chat 和 Trajectory 旁选择**自动化**。
+2. 从侧栏打开**自动化**，或在 Chat 和 Trajectory 旁选择它。如果新建对话页仍是空白状态，请先开始对话。
 3. 填写可以独立理解的任务、schedule、IANA timezone 和 permission boundary。
 4. 正式依赖定时运行前，先点一次**立即运行**，检查结果 Session 和 run record。
 

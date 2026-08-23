@@ -1,4 +1,5 @@
 import { AutomationView } from './AutomationView.js'
+import { AutomationSidebarAction } from './AutomationSidebarAction.js'
 import type { ClientContext } from './contracts.js'
 import { en, NS, zh } from './locales.js'
 import { createAutomationRuntime } from './runtime.js'
@@ -16,6 +17,15 @@ export function apply(ctx: ClientContext): void {
   // observable identity per session for the lifetime of this plugin fiber.
   const runtimes = new Map<string, ReturnType<typeof createAutomationRuntime>>()
   ctx.effect(() => () => { runtimes.clear() }, 'dsh-automation: session runtimes')
+  ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register({
+    name: 'sidebar.footer.action',
+    id: 'automation',
+    order: 40,
+    locale: NS,
+    inject: () => ({
+      automationTabs: () => document.querySelectorAll<HTMLElement>('[role="tab"]'),
+    }),
+  }, AutomationSidebarAction))
   ctx.slots.inject('conversation.view', () => ctx.slots.register({
     name: 'conversation.view',
     id: 'automation',

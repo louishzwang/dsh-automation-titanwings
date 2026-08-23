@@ -70,7 +70,7 @@ If a task depends on unstated chat history, needs an interactive approval halfwa
 
 ### 🕹️ One control plane, two ways in
 
-- **DSH Web:** use the **Automations** conversation tab to create a rule, pause or resume it, run it now, delete it, and inspect recent runs.
+- **DSH Web:** open **Automations** from the sidebar or the conversation tab to create a rule, pause or resume it, run it now, delete it, and inspect recent runs. On the blank New Session screen, the sidebar shortcut tells you to start a conversation instead of failing silently.
 - **Any eligible root Agent:** ask in natural language. Six scoped tools let the Agent manage automations only for its exact workspace.
 
 There is no separate bot, daemon UI, or third-party scheduler to operate.
@@ -146,7 +146,7 @@ package build script and needs no `allowBuilds` entry.
 ### 🖥️ From DSH Web
 
 1. Open a Session attached to the workspace you want to automate.
-2. Select **Automations** next to Chat and Trajectory.
+2. Open **Automations** from the sidebar, or select it next to Chat and Trajectory. If the New Session screen is still blank, start the conversation first.
 3. Enter a self-contained task, schedule, IANA time zone, and permission boundary.
 4. Use **Run now** once before relying on the schedule; inspect the resulting Session and run record.
 

@@ -1,6 +1,8 @@
 export declare const NS = "dsh-automation";
 export declare const en: {
     readonly tab: "Automations";
+    readonly 'sidebar.open': "Open Automations";
+    readonly 'sidebar.unavailable': "Start a conversation before opening Automations.";
     readonly 'header.eyebrow': "Autonomous coding work";
     readonly 'header.title': "Automations";
     readonly 'header.subtitle': "Schedule fresh, auditable agent runs for this workspace.";

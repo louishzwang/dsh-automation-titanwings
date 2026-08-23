@@ -2,6 +2,8 @@ export const NS = 'dsh-automation'
 
 export const en = {
   tab: 'Automations',
+  'sidebar.open': 'Open Automations',
+  'sidebar.unavailable': 'Start a conversation before opening Automations.',
   'header.eyebrow': 'Autonomous coding work',
   'header.title': 'Automations',
   'header.subtitle': 'Schedule fresh, auditable agent runs for this workspace.',
@@ -116,6 +118,8 @@ export type AutomationLocaleKey = keyof typeof en
 
 export const zh: Record<AutomationLocaleKey, string> = {
   tab: '自动化',
+  'sidebar.open': '打开自动化',
+  'sidebar.unavailable': '请先开始一个对话，再打开自动化。',
   'header.eyebrow': '自主编码任务',
   'header.title': '自动化',
   'header.subtitle': '为当前工作区安排独立、可审计的 Agent 运行。',
