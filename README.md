@@ -5,7 +5,7 @@
 ### *Run coding tasks on schedule. Manage them from Web or Agent.*
 
 [![DeepSeek Harness](https://img.shields.io/badge/DeepSeek%20Harness-plugin-4D6BFE)](https://github.com/deepseek-ai)
-[![Version](https://img.shields.io/badge/version-0.1.6-4D6BFE)](package.json)
+[![Version](https://img.shields.io/badge/version-0.1.7-4D6BFE)](package.json)
 [![Node.js](https://img.shields.io/badge/Node.js-22.19%2B-4D6BFE)](package.json)
 [![License: MIT](https://img.shields.io/badge/license-MIT-4D6BFE)](LICENSE)
 [![GitHub stars](https://img.shields.io/github/stars/titanwings/dsh-automation?style=social)](https://github.com/titanwings/dsh-automation/stargazers)
@@ -116,7 +116,7 @@ Set `archiveRunSessions: true` in the Cordis plugin config to archive completed,
 Install the GitHub bundle into the DSH Web profile, then restart `dsh web`:
 
 ```bash
-dsh plugin --profile web add github:titanwings/dsh-automation#v0.1.6
+dsh plugin --profile web add github:titanwings/dsh-automation#v0.1.7
 ```
 
 The version tag keeps the install reproducible; a reviewed commit SHA is equally valid. If you run DSH from its source checkout, use `pnpm dsh` in place of `dsh`.
