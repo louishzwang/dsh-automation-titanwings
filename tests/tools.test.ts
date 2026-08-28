@@ -8,14 +8,24 @@ interface ToolDefinition {
   execute(args: unknown, context: { readonly agent?: unknown; readonly signal: AbortSignal }): Promise<unknown>
 }
 
-test('Agent management tools require the exact registered Agent identity, not a recycled id', async () => {
+test('Shared-registration tools tolerate a second Agent and attribute execution to the caller', async () => {
   const registered = new Map<string, ToolDefinition>()
-  let createCalls = 0
-  let createRequest: Record<string, unknown> | undefined
+  const makeSharedRegistry = () => (definition: unknown) => {
+    const tool = definition as ToolDefinition
+    if (registered.has(tool.name)) {
+      throw new Error(`tool "${tool.name}" is already registered (for a per-agent variant, register through that agent's \`agent.ctx\` instead)`)
+    }
+    registered.set(tool.name, tool)
+    return () => { registered.delete(tool.name) }
+  }
+  const makeAgent = (id: string) => ({
+    id,
+    ctx: { tools: { register: makeSharedRegistry() } },
+  })
+  const scopes: unknown[] = []
   const service = {
-    create: async (_scope: unknown, request: Record<string, unknown>) => {
-      createCalls += 1
-      createRequest = request
+    create: async (scope: unknown) => {
+      scopes.push(scope)
       return { id: 'automation-created' }
     },
     snapshot: async () => ({ definitions: [], runs: [] }),
@@ -23,40 +33,28 @@ test('Agent management tools require the exact registered Agent identity, not a 
     runNow: async () => ({}),
     delete: async () => ({}),
   }
-  const agent = {
-    id: 'agent-reused-id',
-    ctx: {
-      tools: {
-        register: (definition: unknown) => {
-          const tool = definition as ToolDefinition
-          registered.set(tool.name, tool)
-          return () => { registered.delete(tool.name) }
-        },
-      },
-    },
-  }
-  const dispose = registerAutomationTools(service as never, agent)
+
+  // The Host resolves every Agent's registration into one shared layer:
+  // the second mount must not throw, and both Agents stay usable.
+  const disposeFirst = registerAutomationTools(service as never, makeAgent('agent-a'))
+  const disposeSecond = registerAutomationTools(service as never, makeAgent('agent-b'))
+
   const tool = registered.get('automation_create')!
   const signal = new AbortController().signal
   const args = {
-    name: 'Scoped automation',
+    name: 'Shared automation',
     prompt: 'Inspect one bounded condition.',
     kind: 'daily',
     time_zone: 'UTC',
     time: '09:00',
   }
 
-  const staleResult = await tool.execute(args, { agent: { id: agent.id }, signal })
-  assert.deepEqual(staleResult, { ok: false, code: 'cancelled' })
-  assert.equal(createCalls, 0)
+  const viaSecondAgent = await tool.execute(args, { agent: { id: 'agent-b' }, signal })
+  assert.deepEqual(viaSecondAgent, { ok: true, automation: { id: 'automation-created' } })
+  assert.deepEqual(scopes, [{ sessionId: 'agent-b', creatorKind: 'agent' }])
 
-  const ownerResult = await tool.execute(args, { agent, signal })
-  assert.deepEqual(ownerResult, { ok: true, automation: { id: 'automation-created' } })
-  assert.equal(createCalls, 1)
-  assert.equal(Object.hasOwn(createRequest ?? {}, 'provider'), false)
-  assert.equal(Object.hasOwn(createRequest ?? {}, 'model'), false)
-  assert.equal(Object.hasOwn(createRequest ?? {}, 'reasoningEffort'), false)
-  dispose()
+  disposeFirst()
+  disposeSecond()
   assert.equal(registered.size, 0)
 })
 

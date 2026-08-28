@@ -125,11 +125,30 @@ function scheduleFromArgs(args: ScheduleArgs, now: string): AutomationSchedule {
   }
 }
 
-/** Install tools once into one exact root Agent scope. */
+/**
+ * Install the management tools for one root Agent.
+ *
+ * The Host may resolve `agent.ctx.tools.register` into one shared layer for
+ * every Agent (observed with dsh-tools: a second registration of the same
+ * name fails the whole session creation with "already registered"). The
+ * registration is therefore duplicate-tolerant, and each execution derives
+ * its ownership scope from the executing Agent instead of the Agent that
+ * happened to register first, so every live Agent keeps working tools.
+ */
 export function registerAutomationTools(service: AutomationService, agent: ToolAgent): () => void {
-  const scope = { sessionId: agent.id, creatorKind: 'agent' as const }
   const disposers: Array<() => void> = []
-  const register = (definition: unknown): void => { disposers.push(agent.ctx.tools.register(definition)) }
+  const scopeFor = (exec: ToolRunContext) => ({
+    sessionId: exec.agent?.id ?? agent.id,
+    creatorKind: 'agent' as const,
+  })
+  const register = (definition: unknown): void => {
+    try {
+      disposers.push(agent.ctx.tools.register(definition))
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('already registered')) return
+      throw error
+    }
+  }
   try {
     register(defineTool({
       name: 'automation_create',
@@ -150,11 +169,11 @@ export function registerAutomationTools(service: AutomationService, agent: ToolA
       },
       output: JSON_OUTPUT,
       async execute(args: CreateArgs, exec: ToolRunContext) {
-        if (exec.agent !== agent || exec.signal.aborted) return json({ ok: false, code: 'cancelled' })
+        if (exec.signal.aborted) return json({ ok: false, code: 'cancelled' })
         try {
           const now = new Date().toISOString()
           validateModelSelector(args, true)
-          const value = await service.create(scope, {
+          const value = await service.create(scopeFor(exec), {
             name: args.name,
             prompt: args.prompt,
             schedule: scheduleFromArgs(args, now),
@@ -178,9 +197,9 @@ export function registerAutomationTools(service: AutomationService, agent: ToolA
       parameters: {},
       output: JSON_OUTPUT,
       async execute(_args: Record<string, never>, exec: ToolRunContext) {
-        if (exec.agent !== agent || exec.signal.aborted) return json({ ok: false, code: 'cancelled' })
+        if (exec.signal.aborted) return json({ ok: false, code: 'cancelled' })
         try {
-          return json({ ok: true, value: await service.snapshot(scope, exec.signal) })
+          return json({ ok: true, value: await service.snapshot(scopeFor(exec), exec.signal) })
         } catch (error: unknown) {
           if (exec.signal.aborted) return json({ ok: false, code: 'cancelled' })
           return json({ ok: false, code: 'automation_error', message: error instanceof Error ? error.message : String(error) })
@@ -210,7 +229,7 @@ export function registerAutomationTools(service: AutomationService, agent: ToolA
       },
       output: JSON_OUTPUT,
       async execute(args: UpdateArgs, exec: ToolRunContext) {
-        if (exec.agent !== agent || exec.signal.aborted) return json({ ok: false, code: 'cancelled' })
+        if (exec.signal.aborted) return json({ ok: false, code: 'cancelled' })
         try {
           validateScheduleSelector(args)
           validateModelSelector(args, false)
@@ -233,7 +252,7 @@ export function registerAutomationTools(service: AutomationService, agent: ToolA
           if (args.permission !== undefined) input.permissionPreset = args.permission as PermissionPreset
           if (args.kind !== undefined) input.schedule = scheduleFromArgs(args, new Date().toISOString())
           if (Object.keys(input).length === 0) throw new Error('automation_update requires at least one changed field')
-          const value = await service.update(scope, args.id, input, exec.signal)
+          const value = await service.update(scopeFor(exec), args.id, input, exec.signal)
           return json({ ok: true, automation: value })
         } catch (error: unknown) {
           if (exec.signal.aborted) return json({ ok: false, code: 'cancelled' })
@@ -249,9 +268,9 @@ export function registerAutomationTools(service: AutomationService, agent: ToolA
       parameters: {},
       output: JSON_OUTPUT,
       async execute(_args: Record<string, never>, exec: ToolRunContext) {
-        if (exec.agent !== agent || exec.signal.aborted) return json({ ok: false, code: 'cancelled' })
+        if (exec.signal.aborted) return json({ ok: false, code: 'cancelled' })
         try {
-          const snapshot = await service.snapshot(scope, exec.signal)
+          const snapshot = await service.snapshot(scopeFor(exec), exec.signal)
           return json({ ok: true, generatedAt: snapshot.generatedAt, runs: snapshot.runs })
         } catch (error: unknown) {
           if (exec.signal.aborted) return json({ ok: false, code: 'cancelled' })
@@ -267,9 +286,9 @@ export function registerAutomationTools(service: AutomationService, agent: ToolA
       parameters: { id: { type: 'string', required: true } },
       output: JSON_OUTPUT,
       async execute(args: IdArgs, exec: ToolRunContext) {
-        if (exec.agent !== agent || exec.signal.aborted) return json({ ok: false, code: 'cancelled' })
+        if (exec.signal.aborted) return json({ ok: false, code: 'cancelled' })
         try {
-          return json({ ok: true, run: await service.runNow(scope, args.id, exec.signal) })
+          return json({ ok: true, run: await service.runNow(scopeFor(exec), args.id, exec.signal) })
         } catch (error: unknown) {
           if (exec.signal.aborted) return json({ ok: false, code: 'cancelled' })
           return json({ ok: false, code: 'automation_error', message: error instanceof Error ? error.message : String(error) })
@@ -284,9 +303,9 @@ export function registerAutomationTools(service: AutomationService, agent: ToolA
       parameters: { id: { type: 'string', required: true } },
       output: JSON_OUTPUT,
       async execute(args: IdArgs, exec: ToolRunContext) {
-        if (exec.agent !== agent || exec.signal.aborted) return json({ ok: false, code: 'cancelled' })
+        if (exec.signal.aborted) return json({ ok: false, code: 'cancelled' })
         try {
-          return json({ ok: true, value: await service.delete(scope, args.id, exec.signal) })
+          return json({ ok: true, value: await service.delete(scopeFor(exec), args.id, exec.signal) })
         } catch (error: unknown) {
           if (exec.signal.aborted) return json({ ok: false, code: 'cancelled' })
           return json({ ok: false, code: 'automation_error', message: error instanceof Error ? error.message : String(error) })
