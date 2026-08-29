@@ -57,3 +57,7 @@ export function AlertIcon(props: IconProps): JSX.Element {
 export function ChevronIcon(props: IconProps): JSX.Element {
   return <IconFrame {...props}><path d="m8.5 10 3.5 3.5 3.5-3.5" /></IconFrame>
 }
+
+export function GlobeIcon(props: IconProps): JSX.Element {
+  return <IconFrame {...props}><circle cx="12" cy="12" r="8.25" /><path d="M3.75 12h16.5" /><path d="M12 3.75c2.6 2.55 3.9 5.55 3.9 8.25s-1.3 5.7-3.9 8.25c-2.6-2.55-3.9-5.55-3.9-8.25S9.4 6.3 12 3.75Z" /></IconFrame>
+}

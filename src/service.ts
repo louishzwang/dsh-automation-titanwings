@@ -182,7 +182,7 @@ export class AutomationService {
         workspace: resolved.workspace,
         definitions: definitions.map((definition) => ({
           ...definition,
-          nextRunAt: definition.status === 'active' ? nextOccurrence(definition.schedule, generatedAt) : null,
+          nextRunAt: nextOccurrence(definition.schedule, generatedAt),
           lastRun: workspaceRuns.find(run => run.automationId === definition.id) ?? null,
         })),
         runs,

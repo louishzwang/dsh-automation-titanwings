@@ -12,4 +12,5 @@ export declare function CalendarIcon(props: IconProps): JSX.Element;
 export declare function CheckIcon(props: IconProps): JSX.Element;
 export declare function AlertIcon(props: IconProps): JSX.Element;
 export declare function ChevronIcon(props: IconProps): JSX.Element;
+export declare function GlobeIcon(props: IconProps): JSX.Element;
 export {};

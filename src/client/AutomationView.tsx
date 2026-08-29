@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
 import type { AutomationViewProps, Translate } from './contracts.js'
 import type { AutomationLocaleKey } from './locales.js'
 import {
@@ -7,6 +7,8 @@ import {
   buildMonthCalendarGrid,
   buildUpdateInput,
   buildWeekCalendarDays,
+  clearDraft,
+  countAutomationsByStatusOnDay,
   countAutomationsOnDay,
   defaultFormState,
   deriveOverview,
@@ -15,10 +17,13 @@ import {
   formStateFromAutomation,
   isSameLocalDay,
   modelRouteChoices,
+  plannedNextRun,
+  readDraft,
   reasoningEffortChoices,
   readSortDefault,
   shortSessionId,
   sortAutomations,
+  writeDraft,
   writeSortDefault,
   startOfLocalDay,
   startOfLocalWeek,
@@ -34,6 +39,7 @@ import {
   AutomationIcon,
   CalendarIcon,
   CheckIcon,
+  GlobeIcon,
   PauseIcon,
   PencilIcon,
   PlayIcon,
@@ -53,6 +59,62 @@ import type {
 
 const POLL_INTERVAL_MS = 15_000
 const WEEKDAYS = [1, 2, 3, 4, 5, 6, 7] as const
+const FALLBACK_CITY_ZONES = [
+  'UTC', 'Asia/Shanghai', 'Asia/Hong_Kong', 'Asia/Tokyo', 'Asia/Singapore',
+  'Asia/Seoul', 'Asia/Dubai', 'Europe/London', 'Europe/Paris', 'Europe/Berlin',
+  'Europe/Moscow', 'America/New_York', 'America/Chicago', 'America/Denver',
+  'America/Los_Angeles', 'America/Sao_Paulo', 'Australia/Sydney',
+] as const
+
+function cityZoneList(): readonly string[] {
+  if (typeof Intl !== 'undefined' && 'supportedValuesOf' in Intl) {
+    return Intl.supportedValuesOf('timeZone').filter(zone => (
+      zone === 'UTC'
+      || (zone.includes('/') && !zone.startsWith('Etc/') && !zone.startsWith('SystemV/'))
+    ))
+  }
+  return FALLBACK_CITY_ZONES
+}
+
+function zoneUtcOffset(zone: string): { readonly minutes: number; readonly label: string } {
+  const minutesOf = (offset: number): { readonly minutes: number; readonly label: string } => {
+    const label = offset === 0
+      ? 'UTC+00:00'
+      : `UTC${offset > 0 ? '+' : '-'}${String(Math.floor(Math.abs(offset) / 60)).padStart(2, '0')}:${String(Math.abs(offset) % 60).padStart(2, '0')}`
+    return { minutes: offset, label }
+  }
+  try {
+    const winter = new Date('2026-01-15T00:00:00Z')
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: zone,
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
+    }).formatToParts(winter)
+    const get = (type: string): number => Number(parts.find(part => part.type === type)?.value ?? NaN)
+    const local = Date.UTC(get('year'), get('month') - 1, get('day'), get('hour'), get('minute'), get('second'))
+    if (!Number.isFinite(local)) return minutesOf(0)
+    return minutesOf(Math.round((local - winter.getTime()) / 60_000))
+  } catch {
+    return minutesOf(0)
+  }
+}
+
+function timeZoneChoices(current: string): readonly { readonly value: string; readonly label: string }[] {
+  const items = cityZoneList().map(zone => {
+    const offset = zoneUtcOffset(zone)
+    const city = zone === 'UTC' ? 'UTC' : (zone.split('/').pop() ?? zone).replace(/_/g, ' ')
+    return {
+      value: zone,
+      label: `${city} (${offset.label})`,
+      minutes: offset.minutes,
+    }
+  }).sort((left, right) => left.minutes - right.minutes || left.label.localeCompare(right.label))
+  if (!items.some(item => item.value === current)) {
+    const offset = zoneUtcOffset(current)
+    items.push({ value: current, label: `${current} (${offset.label})`, minutes: offset.minutes })
+  }
+  return items.map(({ value, label }) => ({ value, label }))
+}
 const SORT_STORAGE: SortPreferenceStorage | undefined = typeof window === 'undefined' ? undefined : window.localStorage
 
 type BusyAction = 'create' | 'update' | 'pause' | 'resume' | 'run' | 'read' | 'delete'
@@ -99,8 +161,121 @@ interface FormCommonProps {
   readonly onCancel: () => void
 }
 
+function initialFloatBox(): { readonly x: number; readonly y: number; readonly w: number; readonly h: number } {
+  if (typeof window === 'undefined') return { x: 0, y: 0, w: 760, h: 620 }
+  const w = Math.min(760, window.innerWidth - 32)
+  const h = Math.min(620, window.innerHeight - 48)
+  return {
+    x: Math.max(16, Math.round((window.innerWidth - w) / 2)),
+    y: Math.max(16, Math.round((window.innerHeight - h) / 2)),
+    w,
+    h,
+  }
+}
+
+function AutomationFloat({ label, busy, onClose, children }: {
+  readonly label: string
+  readonly busy: boolean
+  readonly onClose: () => void
+  readonly children: ReactNode
+}): JSX.Element {
+  const [box, setBox] = useState(initialFloatBox)
+  const dragRef = useRef<{
+    readonly mode: 'move' | 'resize'
+    readonly startX: number
+    readonly startY: number
+    readonly x: number
+    readonly y: number
+    readonly w: number
+    readonly h: number
+  }>()
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key !== 'Escape' || busy) return
+      event.preventDefault()
+      onClose()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => { window.removeEventListener('keydown', onKeyDown) }
+  }, [busy, onClose])
+
+  const clampBox = (value: { readonly x: number; readonly y: number; readonly w: number; readonly h: number }): void => {
+    const w = Math.max(480, Math.min(value.w, window.innerWidth - 24))
+    const h = Math.max(320, Math.min(value.h, window.innerHeight - 24))
+    const x = Math.max(0, Math.min(value.x, window.innerWidth - 160))
+    const y = Math.max(0, Math.min(value.y, window.innerHeight - 96))
+    setBox({ x, y, w, h })
+  }
+
+  const onMoveStart = (event: ReactMouseEvent<HTMLDivElement>): void => {
+    if (busy || dragRef.current !== undefined) return
+    const target = event.target as HTMLElement
+    if (target.closest('button, input, textarea, select, details, summary') !== null) return
+    event.preventDefault()
+    dragRef.current = { mode: 'move', startX: event.clientX, startY: event.clientY, x: box.x, y: box.y, w: box.w, h: box.h }
+    const onMove = (move: globalThis.MouseEvent): void => {
+      const drag = dragRef.current
+      if (drag === undefined) return
+      clampBox({
+        x: drag.x + move.clientX - drag.startX,
+        y: drag.y + move.clientY - drag.startY,
+        w: drag.w,
+        h: drag.h,
+      })
+    }
+    const onUp = (): void => {
+      dragRef.current = undefined
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }
+
+  const onResizeStart = (event: ReactMouseEvent<HTMLDivElement>): void => {
+    if (busy || dragRef.current !== undefined) return
+    event.preventDefault()
+    event.stopPropagation()
+    dragRef.current = { mode: 'resize', startX: event.clientX, startY: event.clientY, x: box.x, y: box.y, w: box.w, h: box.h }
+    const onMove = (move: globalThis.MouseEvent): void => {
+      const drag = dragRef.current
+      if (drag === undefined) return
+      clampBox({
+        x: drag.x,
+        y: drag.y,
+        w: drag.w + move.clientX - drag.startX,
+        h: drag.h + move.clientY - drag.startY,
+      })
+    }
+    const onUp = (): void => {
+      dragRef.current = undefined
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }
+
+  return (
+    <div
+      className="dsh-automation-float"
+      role="dialog"
+      aria-modal="false"
+      aria-label={label}
+      style={{ left: box.x, top: box.y, width: box.w, height: box.h }}
+      onMouseDown={onMoveStart}
+    >
+      {children}
+      <div className="dsh-automation-float-resize" aria-hidden="true" onMouseDown={onResizeStart} />
+    </div>
+  )
+}
+
 type AutomationFormProps = FormCommonProps & ({
   readonly mode: 'create'
+  readonly initial: AutomationFormState | undefined
+  readonly onSaveDraft?: (form: AutomationFormState) => void
   readonly onSubmit: (input: CreateAutomationInput) => Promise<void>
 } | {
   readonly mode: 'edit'
@@ -111,13 +286,15 @@ type AutomationFormProps = FormCommonProps & ({
 function AutomationForm(props: AutomationFormProps): JSX.Element {
   const { t, busy, loadModelCatalog, onCancel } = props
   const [form, setForm] = useState<AutomationFormState>(() => props.mode === 'create'
-    ? defaultFormState()
+    ? props.initial ?? defaultFormState()
     : formStateFromAutomation(props.automation))
+  const [draftSaved, setDraftSaved] = useState(false)
   const [validationError, setValidationError] = useState<string>()
   const [catalog, setCatalog] = useState<ModelCatalog>({ groups: [], failures: [] })
   const [catalogError, setCatalogError] = useState<string>()
   const [catalogLoading, setCatalogLoading] = useState(true)
   const [catalogGeneration, setCatalogGeneration] = useState(0)
+  const zoneSelect = useRef<HTMLSelectElement>(null)
 
   useEffect(() => {
     let live = true
@@ -137,8 +314,15 @@ function AutomationForm(props: AutomationFormProps): JSX.Element {
 
   const update = <Key extends keyof AutomationFormState>(key: Key, value: AutomationFormState[Key]): void => {
     setForm(current => ({ ...current, [key]: value }))
+    setDraftSaved(false)
     setValidationError(undefined)
   }
+  const onSaveDraftProp = props.mode === 'create' ? props.onSaveDraft : undefined
+  useEffect(() => {
+    if (onSaveDraftProp === undefined) return
+    onSaveDraftProp(form)
+    setDraftSaved(true)
+  }, [form, onSaveDraftProp])
   const toggleWeekday = (day: number): void => {
     update('weekdays', form.weekdays.includes(day)
       ? form.weekdays.filter(value => value !== day)
@@ -153,6 +337,7 @@ function AutomationForm(props: AutomationFormProps): JSX.Element {
         ? current.reasoningEffort
         : null,
     }))
+    setDraftSaved(false)
     setValidationError(undefined)
   }
   const routeKey = (provider: string, model: string): string => JSON.stringify([provider, model])
@@ -211,7 +396,7 @@ function AutomationForm(props: AutomationFormProps): JSX.Element {
       <div className="dsh-automation-form-grid">
         <label className="dsh-automation-field">
           <span>{t('form.name')}</span>
-          <input value={form.name} maxLength={80} placeholder={t('form.namePlaceholder')} onChange={event => update('name', event.currentTarget.value)} />
+          <input value={form.name} maxLength={80} placeholder={t('form.namePlaceholder')} autoFocus onChange={event => update('name', event.currentTarget.value)} />
         </label>
         <label className="dsh-automation-field dsh-automation-field--wide">
           <span>{t('form.prompt')}</span>
@@ -347,7 +532,34 @@ function AutomationForm(props: AutomationFormProps): JSX.Element {
             )}
             <label className="dsh-automation-field">
               <span>{t('form.timeZone')}</span>
-              <input value={form.timeZone} onChange={event => update('timeZone', event.currentTarget.value)} />
+              <span className="dsh-automation-timezone">
+                <select
+                  ref={zoneSelect}
+                  value={form.timeZone}
+                  onChange={event => update('timeZone', event.currentTarget.value)}
+                >
+                  {timeZoneChoices(form.timeZone).map(zone => (
+                    <option key={zone.value} value={zone.value}>{zone.label}</option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  className="dsh-automation-timezone-globe"
+                  aria-label={t('form.timeZone')}
+                  title={t('form.timeZone')}
+                  onClick={() => {
+                    const select = zoneSelect.current
+                    if (select === null) return
+                    try {
+                      select.showPicker()
+                    } catch {
+                      select.focus()
+                    }
+                  }}
+                >
+                  <GlobeIcon />
+                </button>
+              </span>
             </label>
           </div>
         </fieldset>
@@ -371,6 +583,20 @@ function AutomationForm(props: AutomationFormProps): JSX.Element {
 
       <div className="dsh-automation-form-footer">
         <span className="dsh-automation-form-error" role="alert">{validationError}</span>
+        {props.mode === 'create' && (
+          <button
+            className="dsh-automation-button dsh-automation-button--ghost"
+            type="button"
+            disabled={busy || draftSaved}
+            onClick={() => {
+              props.onSaveDraft?.(form)
+              setDraftSaved(true)
+            }}
+          >
+            {draftSaved ? <CheckIcon /> : null}
+            {t(draftSaved ? 'form.draftSaved' : 'form.saveDraft')}
+          </button>
+        )}
         <button className="dsh-automation-button dsh-automation-button--primary" type="submit" disabled={busy}>
           {props.mode === 'create' ? <PlusIcon /> : <PencilIcon />}
           {busy
@@ -435,9 +661,11 @@ function AutomationCard(props: AutomationCardProps): JSX.Element {
       <dl className="dsh-automation-card-times">
         <div>
           <dt>{t('card.nextRun')}</dt>
-          <dd>{automation.status === 'active' && automation.nextRunAt !== undefined
-            ? formatRelativeTime(automation.nextRunAt, now, t)
-            : '—'}</dd>
+          <dd>{automation.status === 'paused'
+            ? t('card.nextRunPaused')
+            : automation.nextRunAt !== undefined
+              ? formatRelativeTime(automation.nextRunAt, now, t)
+              : '—'}</dd>
         </div>
         <div>
           <dt>{t('card.lastRun')}</dt>
@@ -537,6 +765,9 @@ export function AutomationView({
   const [rangeView, setRangeView] = useState<CalendarRangeView>('list')
   const [calendarCursor, setCalendarCursor] = useState<Date>()
   const [selectedDate, setSelectedDate] = useState<Date>()
+  const [draft, setDraft] = useState<AutomationFormState | undefined>(undefined)
+  const [draftClosePrompt, setDraftClosePrompt] = useState(false)
+  const draftRef = useRef<{ form: AutomationFormState | undefined }>({ form: undefined })
   useEffect(() => {
     void refresh().catch(() => undefined)
     const timer = window.setInterval(() => { void refresh().catch(() => undefined) }, POLL_INTERVAL_MS)
@@ -544,11 +775,47 @@ export function AutomationView({
   }, [refresh])
 
   const snapshot = state.snapshot
+  const draftKey = snapshot === undefined
+    ? undefined
+    : `dsh-automation.draft.workspace.${snapshot.scope.workspaceId ?? 'local'}`
+  useEffect(() => {
+    setDraft(draftKey === undefined ? undefined : readDraft(SORT_STORAGE, draftKey))
+  }, [draftKey])
+  const saveDraft = useCallback((form: AutomationFormState): void => {
+    if (draftKey === undefined) return
+    writeDraft(SORT_STORAGE, draftKey, form)
+    draftRef.current.form = form
+  }, [draftKey])
+  const hasDraftContent = (): boolean => {
+    const form = draftRef.current.form
+    return form !== undefined && (form.name.trim() !== '' || form.prompt.trim() !== '')
+  }
+  const closeCreate = (): void => {
+    if (hasDraftContent()) setDraftClosePrompt(true)
+    else setShowCreate(false)
+  }
+  const closeCreateKeep = (): void => {
+    setDraftClosePrompt(false)
+    setShowCreate(false)
+  }
+  const closeCreateDiscard = (): void => {
+    if (draftKey !== undefined) clearDraft(SORT_STORAGE, draftKey)
+    draftRef.current.form = undefined
+    setDraft(undefined)
+    setDraftClosePrompt(false)
+    setShowCreate(false)
+  }
   const stats = useMemo(() => snapshot === undefined ? undefined : deriveOverview(snapshot), [snapshot])
   const now = useMemo(() => new Date(snapshot?.serverNow ?? Date.now()), [snapshot?.serverNow])
-  const automations = useMemo(() => (
-    snapshot === undefined ? [] : sortAutomations(snapshot.automations, sortKey, sortDirection)
-  ), [snapshot, sortDirection, sortKey])
+  const automations = useMemo(() => {
+    if (snapshot === undefined) return []
+    const normalized = snapshot.automations.map(automation => {
+      const next = automation.nextRunAt
+        ?? (automation.status === 'paused' ? plannedNextRun(automation.schedule, automation.createdAt, now) : undefined)
+      return next === undefined ? automation : { ...automation, nextRunAt: next }
+    })
+    return sortAutomations(normalized, sortKey, sortDirection)
+  }, [snapshot, now, sortDirection, sortKey])
   const todayStart = useMemo(() => startOfLocalDay(now), [now])
   const todayAutomations = useMemo(() => (
     automations.filter(automation => automation.nextRunAt !== undefined
@@ -601,7 +868,12 @@ export function AutomationView({
   }
   const toggleCreate = (): void => {
     setEditingAutomation(undefined)
-    setShowCreate(value => !value)
+    if (showCreate) {
+      closeCreate()
+      return
+    }
+    if (draftKey !== undefined) setDraft(readDraft(SORT_STORAGE, draftKey))
+    setShowCreate(true)
   }
   const selectSort = (key: AutomationSortKey, direction: AutomationSortDirection): void => {
     setSortKey(key)
@@ -641,6 +913,10 @@ export function AutomationView({
   const onCreate = async (input: ReturnType<typeof buildCreateInput>): Promise<void> => {
     await perform(actionKey('create'), async () => {
       await createAutomation(input)
+      if (draftKey !== undefined) clearDraft(SORT_STORAGE, draftKey)
+      draftRef.current.form = undefined
+      setDraft(undefined)
+      setDraftClosePrompt(false)
       setShowCreate(false)
     })
   }
@@ -707,27 +983,43 @@ export function AutomationView({
       </header>
 
       {showCreate && (
-        <AutomationForm
-          mode="create"
-          t={t}
-          busy={busyKey === actionKey('create')}
-          loadModelCatalog={loadModelCatalog}
-          onCancel={() => setShowCreate(false)}
-          onSubmit={onCreate}
-        />
+        <AutomationFloat label={t('form.title')} busy={busyKey === actionKey('create')} onClose={closeCreate}>
+          {draftClosePrompt && (
+            <div className="dsh-automation-draft-prompt">
+              <span>{t('form.draftPrompt')}</span>
+              <div>
+                <button className="dsh-automation-button dsh-automation-button--ghost" type="button" onClick={closeCreateKeep}>{t('form.draftKeep')}</button>
+                <button className="dsh-automation-button dsh-automation-button--ghost" type="button" onClick={closeCreateDiscard}>{t('form.draftDiscard')}</button>
+                <button className="dsh-automation-button dsh-automation-button--primary" type="button" onClick={() => setDraftClosePrompt(false)}>{t('form.draftEdit')}</button>
+              </div>
+            </div>
+          )}
+          <AutomationForm
+            mode="create"
+            initial={draft}
+            onSaveDraft={saveDraft}
+            t={t}
+            busy={busyKey === actionKey('create')}
+            loadModelCatalog={loadModelCatalog}
+            onCancel={closeCreate}
+            onSubmit={onCreate}
+          />
+        </AutomationFloat>
       )}
 
       {editingAutomation !== undefined && (
-        <AutomationForm
-          key={`${editingAutomation.id}:${editingAutomation.revision}`}
-          mode="edit"
-          automation={editingAutomation}
-          t={t}
-          busy={busyKey === actionKey('update', editingAutomation.id)}
-          loadModelCatalog={loadModelCatalog}
-          onCancel={() => setEditingAutomation(undefined)}
-          onSubmit={onUpdate}
-        />
+        <AutomationFloat label={t('form.editTitle')} busy={busyKey === actionKey('update', editingAutomation.id)} onClose={() => setEditingAutomation(undefined)}>
+          <AutomationForm
+            key={`${editingAutomation.id}:${editingAutomation.revision}`}
+            mode="edit"
+            automation={editingAutomation}
+            t={t}
+            busy={busyKey === actionKey('update', editingAutomation.id)}
+            loadModelCatalog={loadModelCatalog}
+            onCancel={() => setEditingAutomation(undefined)}
+            onSubmit={onUpdate}
+          />
+        </AutomationFloat>
       )}
 
       {(actionError !== undefined || state.error !== undefined) && (
@@ -748,6 +1040,7 @@ export function AutomationView({
               </div>
               <div className="dsh-automation-status-summary">
                 <span><b>{t('stats.active')}</b>{stats?.active ?? 0}</span>
+                <span><b>{t('stats.paused')}</b>{(stats?.total ?? 0) - (stats?.active ?? 0)}</span>
                 <span><b>{t('stats.next')}</b>{stats?.nextRunAt === undefined ? t('stats.noneScheduled') : formatRelativeTime(stats.nextRunAt, now, t)}</span>
               </div>
               <div className="dsh-automation-toolbar-actions">
@@ -804,13 +1097,14 @@ export function AutomationView({
                   {rangeView === 'week' ? (
                     <div className="dsh-automation-cal-week">
                       {weekDays.map(day => {
-                        const count = countAutomationsOnDay(automations, day)
+                        const counts = countAutomationsByStatusOnDay(automations, day)
                         const weekday = day.getDay() === 0 ? 7 : day.getDay()
                         return (
                           <button key={day.toISOString()} type="button" className={`dsh-automation-cal-day${isSameLocalDay(day, todayStart) ? ' is-today' : ''}${isSameLocalDay(day, pickedDate) ? ' is-selected' : ''}`} onClick={() => selectDay(day)}>
                             <span className="dsh-automation-cal-weekday">{t(`day.${weekday}` as AutomationLocaleKey)}</span>
                             <span className="dsh-automation-cal-date">{day.getMonth() + 1}/{day.getDate()}</span>
-                            {count > 0 && <span className="dsh-automation-cal-count">{t('calendar.taskCount', { count })}</span>}
+                            {counts.active > 0 && <span className="dsh-automation-cal-count">{t('calendar.taskCount', { count: counts.active })}</span>}
+                            {counts.paused > 0 && <span className="dsh-automation-cal-count dsh-automation-cal-count--paused">{t('calendar.pausedCount', { count: counts.paused })}</span>}
                           </button>
                         )
                       })}
@@ -824,12 +1118,13 @@ export function AutomationView({
                       </div>
                       <div className="dsh-automation-cal-month-grid">
                         {monthDays.map(day => {
-                          const count = countAutomationsOnDay(automations, day)
+                          const counts = countAutomationsByStatusOnDay(automations, day)
                           const otherMonth = day.getMonth() !== calendarAnchor.getMonth()
                           return (
                             <button key={day.toISOString()} type="button" className={`dsh-automation-cal-month-day${otherMonth ? ' is-other' : ''}${isSameLocalDay(day, todayStart) ? ' is-today' : ''}${isSameLocalDay(day, pickedDate) ? ' is-selected' : ''}`} onClick={() => selectDay(day)}>
                               <span className="dsh-automation-cal-month-date">{day.getDate()}</span>
-                              {count > 0 && <span className="dsh-automation-cal-count">{t('calendar.taskCount', { count })}</span>}
+                              {counts.active > 0 && <span className="dsh-automation-cal-count">{t('calendar.taskCount', { count: counts.active })}</span>}
+                              {counts.paused > 0 && <span className="dsh-automation-cal-count dsh-automation-cal-count--paused">{t('calendar.pausedCount', { count: counts.paused })}</span>}
                             </button>
                           )
                         })}
@@ -870,6 +1165,12 @@ export function AutomationView({
                   onRun={onRun}
                 />
               ))}
+            </div>
+          )}
+
+          {visibleAutomations.length > 0 && (
+            <div className="dsh-automation-empty dsh-automation-empty--footer">
+              <button className="dsh-automation-button dsh-automation-button--primary" type="button" onClick={() => setShowCreate(true)}><PlusIcon />{t('header.create')}</button>
             </div>
           )}
         </section>

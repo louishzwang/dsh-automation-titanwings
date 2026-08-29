@@ -1,6 +1,14 @@
 import type { Translate } from './contracts.js';
 import type { AutomationSchedule, AutomationSnapshot, AutomationViewModel, CreateAutomationInput, ModelCatalog, ModelReasoningEffort, UpdateAutomationInput } from './protocol.js';
 export type ScheduleKind = 'once' | 'interval' | 'daily' | 'weekly';
+export interface DayAutomationCounts {
+    readonly active: number;
+    readonly paused: number;
+}
+/** 读取本地草稿；缺失、损坏或非表单结构时返回 undefined。 */
+export declare function readDraft(storage: SortPreferenceStorage | undefined, key: string): AutomationFormState | undefined;
+export declare function writeDraft(storage: SortPreferenceStorage | undefined, key: string, form: AutomationFormState): void;
+export declare function clearDraft(storage: SortPreferenceStorage | undefined, key: string): void;
 export interface AutomationFormState {
     readonly name: string;
     readonly prompt: string;
@@ -56,6 +64,11 @@ export declare function addLocalDays(date: Date, days: number): Date;
 export declare function isSameLocalDay(left: Date, right: Date): boolean;
 /** 统计 nextRunAt 落在某个本地日期的自动化任务数量。 */
 export declare function countAutomationsOnDay(automations: readonly AutomationViewModel[], day: Date): number;
+/** 统计 nextRunAt 落在某个本地日期的任务数，按启用/暂停状态分开。 */
+export declare function countAutomationsByStatusOnDay(automations: readonly AutomationViewModel[], day: Date): DayAutomationCounts;
+/** 客户端近似计算计划的下次运行时间：主机快照缺失 nextRunAt 时（旧主机或
+ * 刚暂停的任务）用它兜底，保证暂停任务在排序和日历中的位置与启用任务一致。 */
+export declare function plannedNextRun(schedule: AutomationSchedule, createdAt: string, now: Date): string | undefined;
 /** 生成周视图的 7 个本地日期（周一起始）。 */
 export declare function buildWeekCalendarDays(cursor: Date): readonly Date[];
 /** 生成月视图的 6x7 日期网格，覆盖该月所在的所有周。 */

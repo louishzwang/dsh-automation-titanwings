@@ -6,6 +6,8 @@ import {
   buildMonthCalendarGrid,
   buildUpdateInput,
   buildWeekCalendarDays,
+  clearDraft,
+  countAutomationsByStatusOnDay,
   countAutomationsOnDay,
   defaultFormState,
   deriveOverview,
@@ -14,10 +16,12 @@ import {
   formatSchedule,
   isSameLocalDay,
   modelRouteChoices,
+  readDraft,
   readSortDefault,
   reasoningEffortChoices,
   sortAutomations,
   startOfLocalWeek,
+  writeDraft,
   writeSortDefault,
   WORKSPACE_SORT_DEFAULT_KEY,
 } from '../src/client/helpers.js'
@@ -42,7 +46,7 @@ test('English and Chinese dictionaries own exactly the same keys', () => {
 
 test('overview labels distinguish enabled definitions from running executions', () => {
   assert.equal(en['stats.active'], 'Active')
-  assert.equal(zh['stats.active'], '已启用')
+  assert.equal(zh['stats.active'], '启用')
   assert.notEqual(zh['stats.active'], zh['status.running'])
 })
 
@@ -301,6 +305,46 @@ test('calendar helpers build Monday-first week and month grids', () => {
   }
   assert.equal(countAutomationsOnDay([item], new Date(2026, 7, 27)), 1)
   assert.equal(countAutomationsOnDay([item], new Date(2026, 7, 28)), 0)
+})
+
+test('calendar counts split active and paused tasks on the same day', () => {
+  const active: AutomationSnapshot['automations'][number] = {
+    id: 'day-active', revision: 1, name: 'A', prompt: 'P', status: 'active',
+    schedule: { kind: 'daily', time: '09:00', timeZone: 'UTC' }, scheduleSummary: 'Daily',
+    timeZone: 'UTC', provider: null, model: null, reasoningEffort: null, permission: 'read-only',
+    nextRunAt: new Date(2026, 7, 27, 9).toISOString(),
+    createdAt: '2026-08-01T00:00:00.000Z', updatedAt: '2026-08-01T00:00:00.000Z',
+  }
+  const paused: AutomationSnapshot['automations'][number] = {
+    ...active, id: 'day-paused', status: 'paused',
+    nextRunAt: new Date(2026, 7, 27, 10).toISOString(),
+  }
+  assert.deepEqual(countAutomationsByStatusOnDay([active, paused], new Date(2026, 7, 27)), { active: 1, paused: 1 })
+  assert.deepEqual(countAutomationsByStatusOnDay([active, paused], new Date(2026, 7, 28)), { active: 0, paused: 0 })
+})
+
+test('create-form drafts roundtrip through storage and reject corrupt values', () => {
+  const values = new Map<string, string>()
+  const storage = {
+    getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => { values.set(key, value) },
+    removeItem: (key: string) => { values.delete(key) },
+  }
+  const key = 'dsh-automation.draft.workspace.test'
+  assert.equal(readDraft(storage, key), undefined)
+
+  const form = { ...defaultFormState(new Date('2026-08-27T00:00:00Z')), name: 'Draft name', prompt: 'Draft prompt' }
+  writeDraft(storage, key, form)
+  assert.equal(readDraft(storage, key)?.name, 'Draft name')
+
+  values.set(key, '{broken')
+  assert.equal(readDraft(storage, key), undefined)
+
+  values.set(key, JSON.stringify({ name: 'No prompt', scheduleKind: 'daily' }))
+  assert.equal(readDraft(storage, key), undefined)
+
+  clearDraft(storage, key)
+  assert.equal(storage.getItem(key), null)
 })
 
 test('formatRelativeTime handles past and future windows', () => {

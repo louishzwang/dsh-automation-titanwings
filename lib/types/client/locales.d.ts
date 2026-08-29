@@ -35,6 +35,7 @@ export declare const en: {
     readonly 'calendar.year': "Year";
     readonly 'calendar.month': "Month";
     readonly 'calendar.taskCount': "{count} tasks";
+    readonly 'calendar.pausedCount': "{count} paused";
     readonly 'calendar.dow.1': "Mon";
     readonly 'calendar.dow.2': "Tue";
     readonly 'calendar.dow.3': "Wed";
@@ -99,6 +100,12 @@ export declare const en: {
     readonly 'form.workspaceWrite': "Workspace write";
     readonly 'form.workspaceWriteHint': "May edit files inside this workspace; approval is not inherited.";
     readonly 'form.cancel': "Cancel";
+    readonly 'form.saveDraft': "Save draft";
+    readonly 'form.draftSaved': "Draft saved";
+    readonly 'form.draftPrompt': "Keep the saved draft before leaving?";
+    readonly 'form.draftKeep': "Keep draft";
+    readonly 'form.draftDiscard': "Discard draft";
+    readonly 'form.draftEdit': "Keep editing";
     readonly 'form.submit': "Create automation";
     readonly 'form.submitting': "Creating…";
     readonly 'form.save': "Save changes";
@@ -126,6 +133,7 @@ export declare const en: {
     readonly 'status.cancelled': "Cancelled";
     readonly 'status.interrupted': "Interrupted";
     readonly 'card.nextRun': "Next";
+    readonly 'card.nextRunPaused': "Paused";
     readonly 'card.lastRun': "Last";
     readonly 'card.never': "Never run";
     readonly 'card.permission.read-only': "Read only";
