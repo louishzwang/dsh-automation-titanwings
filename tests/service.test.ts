@@ -780,6 +780,72 @@ test('pause blocks a due interval and resume waits for the next future occurrenc
   await service.dispose()
 })
 
+test('archiveRun archives the run Session and rejects foreign or sessionless runs', async () => {
+  const definition = storedDefinition('2026-08-13T00:00:00Z')
+  const runWithSession: AutomationRun = {
+    ...createManualRun(definition, '2026-08-13T00:01:00Z', 'archive-me'),
+    status: 'succeeded',
+    sessionId: 'dsh-automation-session-archive-me',
+    finishedAt: '2026-08-13T00:02:00Z',
+  }
+  const runWithoutSession: AutomationRun = {
+    ...createManualRun(definition, '2026-08-13T00:03:00Z', 'no-session'),
+    status: 'failed',
+    finishedAt: '2026-08-13T00:04:00Z',
+    error: { code: 'executor_error', message: 'no session minted' },
+  }
+  const foreignRun: AutomationRun = {
+    ...createManualRun(definition, '2026-08-13T00:05:00Z', 'foreign'),
+    status: 'succeeded',
+    targetSnapshot: { ...createManualRun(definition, '2026-08-13T00:05:00Z', 'foreign-target').targetSnapshot, workspaceId: 'workspace-2' },
+    sessionId: 'dsh-automation-session-foreign',
+    finishedAt: '2026-08-13T00:06:00Z',
+  }
+  const { service, archivedSessionIds } = await harness({
+    definitions: [definition],
+    runs: [runWithSession, runWithoutSession, foreignRun],
+  })
+
+  const archived = await service.archiveRun(scope, runWithSession.id)
+  assert.equal(archived.id, runWithSession.id)
+  assert.deepEqual(archivedSessionIds, ['dsh-automation-session-archive-me'])
+
+  await assert.rejects(() => service.archiveRun(scope, runWithoutSession.id), /no Session to archive/)
+  await assert.rejects(() => service.archiveRun(scope, foreignRun.id), /another workspace/)
+  await assert.rejects(() => service.archiveRun(scope, 'run-missing'), /unknown automation run/)
+  await service.dispose()
+})
+
+test('deleteRun removes terminal records only and keeps active runs durable', async () => {
+  const definition = storedDefinition('2026-08-13T00:00:00Z')
+  const terminalRun: AutomationRun = {
+    ...createManualRun(definition, '2026-08-13T00:01:00Z', 'delete-me'),
+    status: 'succeeded',
+    sessionId: 'dsh-automation-session-delete-me',
+    finishedAt: '2026-08-13T00:02:00Z',
+  }
+  const foreignRun: AutomationRun = {
+    ...createManualRun(definition, '2026-08-13T00:05:00Z', 'foreign-delete'),
+    status: 'succeeded',
+    targetSnapshot: { ...createManualRun(definition, '2026-08-13T00:05:00Z', 'foreign-delete-target').targetSnapshot, workspaceId: 'workspace-2' },
+    finishedAt: '2026-08-13T00:06:00Z',
+  }
+  const { service, domain } = await harness({
+    definitions: [definition],
+    runs: [terminalRun, foreignRun],
+  })
+  const queuedRun = await service.runNow(scope, definition.id)
+
+  assert.deepEqual(await service.deleteRun(scope, terminalRun.id), { id: terminalRun.id, deleted: true })
+  assert.equal(domain.runs.get(terminalRun.id), undefined)
+  assert.equal(domain.runs.get(queuedRun.id)?.status, 'queued')
+
+  await assert.rejects(() => service.deleteRun(scope, queuedRun.id), /still queued or running/)
+  await assert.rejects(() => service.deleteRun(scope, foreignRun.id), /another workspace/)
+  await assert.rejects(() => service.deleteRun(scope, 'run-missing'), /unknown automation run/)
+  await service.dispose()
+})
+
 test('scheduler materializes only the latest due interval and records overlap', async () => {
   const anchorMs = Date.now() - 6 * 60_000
   const anchor = new Date(anchorMs).toISOString()

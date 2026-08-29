@@ -323,6 +323,40 @@ export class AutomationService {
     }, signal)
   }
 
+  /** Archive the Session of one run so it leaves every conversation-list grouping surface. */
+  async archiveRun(scope: AutomationScope, runId: string, signal?: AbortSignal): Promise<AutomationRun> {
+    return this.serialize(async () => {
+      const run = this.runs.get(runId)
+      if (run === undefined) throw new Error(`unknown automation run '${runId}'`)
+      const { workspace } = await this.resolveScope(scope)
+      throwIfCancelled(signal)
+      if (run.targetSnapshot.workspaceId !== workspace.id) {
+        throw new Error('The automation run belongs to another workspace.')
+      }
+      if (run.sessionId === null) throw new Error('The automation run has no Session to archive.')
+      await this.ctx.workspaceRegistry.archiveSession(SessionId(run.sessionId))
+      return this.runs.get(runId) ?? run
+    }, signal)
+  }
+
+  /** Delete one durable run record while retaining its Session and any definition. */
+  async deleteRun(scope: AutomationScope, runId: string, signal?: AbortSignal): Promise<{ readonly id: string; readonly deleted: boolean }> {
+    const deleted = await this.serialize(async () => {
+      const run = this.runs.get(runId)
+      if (run === undefined) throw new Error(`unknown automation run '${runId}'`)
+      const { workspace } = await this.resolveScope(scope)
+      throwIfCancelled(signal)
+      if (run.targetSnapshot.workspaceId !== workspace.id) {
+        throw new Error('The automation run belongs to another workspace.')
+      }
+      if (run.status === 'queued' || run.status === 'running') {
+        throw new Error('The automation run is still queued or running.')
+      }
+      return this.runs.delete(runId)
+    }, signal)
+    return { id: runId, deleted }
+  }
+
   private async resolveScope(scope: AutomationScope) {
     const agent = this.ctx.agents.get(SessionId(scope.sessionId))
     if (agent === undefined) throw new Error('The automation UI/tool requires a live source session.')

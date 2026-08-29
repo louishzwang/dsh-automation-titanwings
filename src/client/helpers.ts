@@ -85,11 +85,12 @@ export function localDateTimeValue(date = new Date()): string {
   return new Date(future.getTime() - offset).toISOString().slice(0, 16)
 }
 
+/** Create a fresh form state; the schedule defaults to a single future run. */
 export function defaultFormState(now = new Date()): AutomationFormState {
   return {
     name: '',
     prompt: '',
-    scheduleKind: 'daily',
+    scheduleKind: 'once',
     onceAt: localDateTimeValue(now),
     everyMinutes: '60',
     time: '09:00',

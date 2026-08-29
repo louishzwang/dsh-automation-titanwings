@@ -80,6 +80,13 @@ export declare class AutomationService {
     }>;
     runNow(scope: AutomationScope, id: string, signal?: AbortSignal): Promise<AutomationRun>;
     markRead(scope: AutomationScope, runId: string, signal?: AbortSignal): Promise<AutomationRun>;
+    /** Archive the Session of one run so it leaves every conversation-list grouping surface. */
+    archiveRun(scope: AutomationScope, runId: string, signal?: AbortSignal): Promise<AutomationRun>;
+    /** Delete one durable run record while retaining its Session and any definition. */
+    deleteRun(scope: AutomationScope, runId: string, signal?: AbortSignal): Promise<{
+        readonly id: string;
+        readonly deleted: boolean;
+    }>;
     private resolveScope;
     private ownedDefinition;
     private requestPump;

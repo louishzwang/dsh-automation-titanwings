@@ -14,13 +14,14 @@ export declare const en: {
     readonly 'stats.total': "Total";
     readonly 'stats.active': "Active";
     readonly 'stats.next': "Next run";
-    readonly 'stats.attention': "Needs attention";
+    readonly 'stats.attention': "Needs action";
+    readonly 'stats.currentStatus': "Current status:";
     readonly 'stats.paused': "Paused";
     readonly 'stats.noneScheduled': "Not scheduled";
     readonly 'stats.noAttention': "All clear";
     readonly 'section.automations': "Workspace automations";
     readonly 'section.automationsHint': "Each trigger opens a fresh DSH session with its own audit trail.";
-    readonly 'section.runs': "Recent runs";
+    readonly 'section.runs': "Run history";
     readonly 'section.runsHint': "Latest execution state across this workspace.";
     readonly 'section.refresh': "Refresh";
     readonly 'view.todayTasks': "Today";
@@ -160,6 +161,11 @@ export declare const en: {
     readonly 'run.openSession': "Session {id}";
     readonly 'run.sessionArchived': "Session archived · {id}";
     readonly 'run.markRead': "Mark reviewed";
+    readonly 'run.readd': "Add as new";
+    readonly 'run.delete': "Delete record";
+    readonly 'run.confirmDelete': "Delete this run record?";
+    readonly 'run.confirmDeleteHint': "Only the run record is deleted; the conversation it produced is kept.";
+    readonly 'run.automationDeleted': "Automation deleted";
     readonly loading: "Loading automations…";
     readonly 'error.title': "Automations could not be loaded";
     readonly 'error.retry': "Try again";

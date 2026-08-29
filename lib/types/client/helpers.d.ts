@@ -30,6 +30,7 @@ export declare class AutomationFormError extends Error {
     constructor(key: FormErrorKey);
 }
 export declare function localDateTimeValue(date?: Date): string;
+/** Create a fresh form state; the schedule defaults to a single future run. */
 export declare function defaultFormState(now?: Date): AutomationFormState;
 /** Build an editable draft from the complete durable definition, not its card preview. */
 export declare function formStateFromAutomation(automation: AutomationViewModel): AutomationFormState;

@@ -41,7 +41,10 @@ export function apply(ctx: ClientContext): void {
         mutateAutomation: runtime.mutateAutomation,
         runNow: runtime.runNow,
         markRunRead: runtime.markRunRead,
+        archiveRun: runtime.archiveRun,
+        deleteRun: runtime.deleteRun,
         loadModelCatalog: readModelCatalog,
+        refreshSessions: () => ctx.sessions.refresh(),
         openSession: (runId, runSessionId) => runtime!.openRunSession(runId, async () => {
           await ctx.sessions.refresh()
           ctx.sessions.open(runSessionId)

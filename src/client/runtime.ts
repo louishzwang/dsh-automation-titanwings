@@ -1,8 +1,10 @@
 import type { ClientLlmApi, ClientRpc } from './contracts.js'
 import type {
+  ArchiveRunRequest,
   AutomationSnapshot,
   CreateAutomationInput,
   CreateRequest,
+  DeleteRunRequest,
   MarkReadRequest,
   MutateRequest,
   RunNowRequest,
@@ -35,6 +37,8 @@ export interface AutomationRuntime {
   mutateAutomation(automationId: string, mutation: MutateRequest['mutation']): Promise<void>
   runNow(automationId: string): Promise<void>
   markRunRead(runId: string): Promise<void>
+  archiveRun(runId: string): Promise<void>
+  deleteRun(runId: string): Promise<void>
   openRunSession(runId: string, open: () => Promise<void>): Promise<void>
 }
 
@@ -107,6 +111,14 @@ export function createAutomationRuntime(rpc: ClientRpc, sessionId: string): Auto
     const payload: MarkReadRequest = { sessionId, runId }
     await mutateThenRefresh('mark-read', payload)
   }
+  const archiveRun = async (runId: string): Promise<void> => {
+    const payload: ArchiveRunRequest = { sessionId, runId }
+    await mutateThenRefresh('archive-run', payload)
+  }
+  const deleteRun = async (runId: string): Promise<void> => {
+    const payload: DeleteRunRequest = { sessionId, runId }
+    await mutateThenRefresh('delete-run', payload)
+  }
 
   return {
     source,
@@ -128,6 +140,8 @@ export function createAutomationRuntime(rpc: ClientRpc, sessionId: string): Auto
       await mutateThenRefresh('run-now', payload)
     },
     markRunRead,
+    archiveRun,
+    deleteRun,
     async openRunSession(runId, open) {
       // A failed navigation must leave the run unread so it still asks for
       // attention. Mark it only after the destination Session is available.

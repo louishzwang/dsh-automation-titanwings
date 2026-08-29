@@ -42,9 +42,16 @@ test('English and Chinese dictionaries own exactly the same keys', () => {
   assert.deepEqual(Object.keys(zh).sort(), Object.keys(en).sort())
   assert.equal(en.tab, 'Automations')
   assert.equal(zh.tab, '自动化')
+  assert.equal(en['section.runs'], 'Run history')
+  assert.equal(zh['section.runs'], '运行记录')
+  assert.equal(en['run.readd'], 'Add as new')
+  assert.equal(zh['run.readd'], '重新添加')
 })
 
 test('overview labels distinguish enabled definitions from running executions', () => {
+  assert.equal(zh['stats.attention'], '需要处理')
+  assert.equal(zh['stats.noAttention'], '一切正常')
+  assert.equal(zh['stats.currentStatus'], '当前状态：')
   assert.equal(en['stats.active'], 'Active')
   assert.equal(zh['stats.active'], '启用')
   assert.notEqual(zh['stats.active'], zh['status.running'])
@@ -71,6 +78,15 @@ test('buildCreateInput trims text and normalizes a weekly schedule', () => {
     reasoningEffort: null,
     permission: 'workspace-write',
   })
+})
+
+test('the fresh create form defaults to a single future run', () => {
+  const now = new Date('2026-08-13T00:00:00Z')
+  const form = defaultFormState(now)
+  assert.equal(form.scheduleKind, 'once')
+  const once = new Date(form.onceAt)
+  assert.equal(Number.isNaN(once.getTime()), false)
+  assert.equal(once.getTime() > now.getTime(), true)
 })
 
 test('buildCreateInput rejects empty weekly days and unsafe intervals', () => {
@@ -403,35 +419,111 @@ test('opening a run Session marks it read only after navigation succeeds', async
 })
 
 test('an archived run labels its Session without rendering a broken open button', () => {
-  type RenderedChild = {
+  type RenderedNode = {
     readonly type?: unknown
-    readonly props?: { readonly className?: string; readonly children?: unknown }
+    readonly props?: { readonly className?: string; readonly children?: unknown; readonly 'aria-label'?: string }
   }
-  type RenderedRun = { readonly props: { readonly children: readonly RenderedChild[] } }
-  const common = {
-    id: 'run-archived', automationId: 'automation-1', automationName: 'Archived result',
-    status: 'succeeded' as const, trigger: 'manual' as const,
-    scheduledFor: '2026-08-17T00:00:00.000Z', sessionId: 'dsh-automation-session-archived',
+  const flatten = (node: unknown): RenderedNode[] => {
+    if (node === null || node === undefined || typeof node === 'string' || typeof node === 'number' || typeof node === 'boolean') return []
+    if (Array.isArray(node)) return node.flatMap(flatten)
+    const element = node as RenderedNode
+    if (typeof element !== 'object') return []
+    return [element, ...flatten(element.props?.children)]
   }
-  const archived = RecentRun({
-    run: { ...common, sessionArchived: true },
+  const render = (sessionArchived: boolean): RenderedNode[] => flatten(RecentRun({
+    run: {
+      id: 'run-archived', automationId: 'automation-1', automationName: 'Archived result',
+      status: 'succeeded' as const, trigger: 'manual' as const,
+      scheduledFor: '2026-08-17T00:00:00.000Z', sessionId: 'dsh-automation-session-archived',
+      sessionArchived,
+    },
     now: new Date('2026-08-17T00:00:01.000Z'), t, busy: false,
+    automationMissing: false, confirmingDelete: false,
     onOpen: () => { throw new Error('archived Session must not be opened') },
-    onMarkRead: () => {},
-  }) as unknown as RenderedRun
-  const archivedAction = archived.props.children.find(child => child?.props?.className?.includes('--archived'))
-  assert.equal(archivedAction?.type, 'span')
-  assert.match(String(archivedAction?.props?.children), /Session archived/)
-  assert.equal(archived.props.children.some(child => child?.type === 'button'
-    && child?.props?.className === 'dsh-automation-session-id'), false)
+    onMarkRead: () => {}, onReadd: () => {},
+    onConfirmDelete: () => {}, onDelete: () => {},
+  }) as unknown)
 
-  const visible = RecentRun({
-    run: { ...common, sessionArchived: false },
+  const archived = render(true)
+  const archivedLabel = archived.find(child => child.props?.className?.includes('--archived'))
+  assert.equal(archivedLabel?.type, 'span')
+  assert.match(String(archivedLabel?.props?.children), /Session archived/)
+  assert.equal(archived.some(child => child.type === 'button'
+    && child.props?.className === 'dsh-automation-session-id'), false)
+
+  const visible = render(false)
+  assert.equal(visible.some(child => child.type === 'button'
+    && child.props?.className === 'dsh-automation-session-id'), true)
+})
+
+test('run cards expose re-add and record-delete actions with a confirm step', () => {
+  type RenderedNode = {
+    readonly type?: unknown
+    readonly props?: { readonly className?: string; readonly children?: unknown; readonly 'aria-label'?: string; readonly disabled?: boolean }
+  }
+  const flatten = (node: unknown): RenderedNode[] => {
+    if (node === null || node === undefined || typeof node === 'string' || typeof node === 'number' || typeof node === 'boolean') return []
+    if (Array.isArray(node)) return node.flatMap(flatten)
+    const element = node as RenderedNode
+    if (typeof element !== 'object') return []
+    return [element, ...flatten(element.props?.children)]
+  }
+  const render = (options: { confirmingDelete?: boolean; automationMissing?: boolean } = {}): RenderedNode[] => flatten(RecentRun({
+    run: {
+      id: 'run-actions', automationId: 'automation-1', automationName: 'Action result',
+      status: 'succeeded' as const, trigger: 'schedule' as const,
+      scheduledFor: '2026-08-17T00:00:00.000Z', sessionId: 'dsh-automation-session-actions',
+      sessionArchived: false,
+    },
     now: new Date('2026-08-17T00:00:01.000Z'), t, busy: false,
-    onOpen: () => {}, onMarkRead: () => {},
-  }) as unknown as RenderedRun
-  assert.equal(visible.props.children.some(child => child?.type === 'button'
-    && child?.props?.className === 'dsh-automation-session-id'), true)
+    automationMissing: options.automationMissing ?? false,
+    confirmingDelete: options.confirmingDelete ?? false,
+    onOpen: () => {}, onMarkRead: () => {}, onReadd: () => {},
+    onConfirmDelete: () => {}, onDelete: () => {},
+  }) as unknown)
+
+  const actions = render()
+  const buttonText = (className: string): string => actions
+    .filter(node => node.type === 'button' && String(node.props?.className).includes(className))
+    .map(node => String(node.props?.children))
+    .join(' | ')
+  assert.match(buttonText('dsh-automation-button'), /Add as new/)
+  assert.equal(actions.some(node => node.type === 'button' && node.props?.['aria-label'] === 'Delete record'), true)
+  assert.equal(actions.some(node => node.type === 'button' && String(node.props?.children).includes('Archive')), false)
+
+  const missing = render({ automationMissing: true })
+  assert.equal(missing.some(node => node.type === 'button'
+    && String(node.props?.children).includes('Add as new')), true)
+  assert.match(missing.filter(node => node.type === 'h3').map(node => String(node.props?.children)).join(''), /Automation deleted/)
+
+  const confirming = render({ confirmingDelete: true })
+  assert.match(confirming.filter(node => node.type === 'button').map(node => String(node.props?.children)).join(' | '), /Confirm delete/)
+})
+
+test('archive and delete run RPCs carry the run id and refresh the snapshot', async () => {
+  const calls: Array<{ endpoint: string; payload: unknown }> = []
+  const rpc = {
+    call: async (_channel: string, endpoint: string, payload: unknown) => {
+      calls.push({ endpoint, payload })
+      if (endpoint === 'snapshot') {
+        return {
+          ok: true,
+          value: { scope: { cwd: '/workspace' }, automations: [], runs: [], serverNow: new Date().toISOString() },
+        }
+      }
+      return { ok: true, value: {} }
+    },
+  }
+  const runtime = createAutomationRuntime(rpc, 'session-source')
+
+  await runtime.archiveRun('run-archive')
+  assert.deepEqual(calls.map(call => call.endpoint), ['archive-run', 'snapshot'])
+  assert.deepEqual(calls[0]?.payload, { sessionId: 'session-source', runId: 'run-archive' })
+
+  calls.length = 0
+  await runtime.deleteRun('run-delete')
+  assert.deepEqual(calls.map(call => call.endpoint), ['delete-run', 'snapshot'])
+  assert.deepEqual(calls[0]?.payload, { sessionId: 'session-source', runId: 'run-delete' })
 })
 
 test('editing sends a revision-guarded update and refreshes the snapshot', async () => {

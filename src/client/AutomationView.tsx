@@ -117,7 +117,7 @@ function timeZoneChoices(current: string): readonly { readonly value: string; re
 }
 const SORT_STORAGE: SortPreferenceStorage | undefined = typeof window === 'undefined' ? undefined : window.localStorage
 
-type BusyAction = 'create' | 'update' | 'pause' | 'resume' | 'run' | 'read' | 'delete'
+type BusyAction = 'create' | 'update' | 'pause' | 'resume' | 'run' | 'read' | 'delete' | 'delete-run'
 type TaskView = 'today' | 'all'
 type CalendarRangeView = 'list' | 'week' | 'month'
 
@@ -709,45 +709,80 @@ function AutomationCard(props: AutomationCardProps): JSX.Element {
   )
 }
 
-export function RecentRun({ run, now, t, busy, onOpen, onMarkRead }: {
+export function RecentRun({ run, now, t, busy, automationMissing, confirmingDelete, onOpen, onMarkRead, onReadd, onConfirmDelete, onDelete }: {
   run: AutomationRunViewModel
   now: Date
   t: Translate
   busy: boolean
+  automationMissing: boolean
+  confirmingDelete: boolean
   onOpen: (runId: string, sessionId: string) => void
   onMarkRead: (runId: string) => void
+  onReadd: (run: AutomationRunViewModel, anchor?: DOMRect) => void
+  onConfirmDelete: (runId?: string) => void
+  onDelete: (runId: string) => void
 }): JSX.Element {
   const timestamp = run.finishedAt ?? run.startedAt ?? run.scheduledFor
   const canMarkRead = run.unread !== false
     && (run.status === 'failed' || run.status === 'interrupted'
       || run.status === 'skipped' || run.status === 'cancelled')
+  const canDelete = run.status !== 'queued' && run.status !== 'running'
   return (
     <article className="dsh-automation-run">
-      <div className="dsh-automation-run-head">
-        <div>
-          <span className="dsh-automation-run-name">{run.automationName}</span>
-          <span className="dsh-automation-run-trigger">{t(`run.trigger.${run.trigger}`)}</span>
+      <div className="dsh-automation-run-top">
+        <div className="dsh-automation-run-title">
+          <span className="dsh-automation-run-icon"><AutomationIcon /></span>
+          <div>
+            <h3>{automationMissing ? t('run.automationDeleted') : run.automationName}</h3>
+            <div className="dsh-automation-run-meta">
+              <span className="dsh-automation-run-trigger">{t(`run.trigger.${run.trigger}`)}</span>
+              <RunStatusBadge status={run.status} t={t} />
+            </div>
+          </div>
         </div>
         <time dateTime={timestamp}>{formatRelativeTime(timestamp, now, t)}</time>
       </div>
-      <RunStatusBadge status={run.status} t={t} />
       {(run.summary !== undefined || run.error !== undefined) && (
         <p className={run.error === undefined ? '' : 'is-error'}>{run.error ?? run.summary}</p>
       )}
       {run.sessionId !== undefined && run.sessionArchived && (
-        <span className="dsh-automation-session-id dsh-automation-session-id--archived" title={run.sessionId}>
-          {t('run.sessionArchived', { id: shortSessionId(run.sessionId) })}
-        </span>
+        <div className="dsh-automation-run-session-row">
+          <span className="dsh-automation-session-id dsh-automation-session-id--archived" title={run.sessionId}>
+            {t('run.sessionArchived', { id: shortSessionId(run.sessionId) })}
+          </span>
+        </div>
       )}
       {run.sessionId !== undefined && !run.sessionArchived && (
-        <button className="dsh-automation-session-id" type="button" onClick={() => onOpen(run.id, run.sessionId!)}>
-          {t('run.openSession', { id: shortSessionId(run.sessionId) })}
-        </button>
+        <div className="dsh-automation-run-session-row">
+          <button className="dsh-automation-session-id" type="button" onClick={() => onOpen(run.id, run.sessionId!)}>
+            {t('run.openSession', { id: shortSessionId(run.sessionId) })}
+          </button>
+        </div>
       )}
-      {canMarkRead && (
-        <button className="dsh-automation-run-review" type="button" onClick={() => onMarkRead(run.id)} disabled={busy}>
-          <CheckIcon />{t('run.markRead')}
-        </button>
+      {confirmingDelete ? (
+        <div className="dsh-automation-delete-confirm dsh-automation-run-confirm">
+          <div><strong>{t('run.confirmDelete')}</strong><span>{t('run.confirmDeleteHint')}</span></div>
+          <div>
+            <button className="dsh-automation-button dsh-automation-button--ghost" type="button" onClick={() => onConfirmDelete()} disabled={busy}>{t('card.cancel')}</button>
+            <button className="dsh-automation-button dsh-automation-button--danger" type="button" onClick={() => onDelete(run.id)} disabled={busy}><TrashIcon />{t('card.confirm')}</button>
+          </div>
+        </div>
+      ) : (
+        <div className="dsh-automation-run-actions">
+          {canMarkRead && (
+            <button className="dsh-automation-button dsh-automation-button--ghost" type="button" onClick={() => onMarkRead(run.id)} disabled={busy}>
+              <CheckIcon />{t('run.markRead')}
+            </button>
+          )}
+          <button className="dsh-automation-button dsh-automation-button--ghost" type="button" onClick={(event) => onReadd(run, event.currentTarget.getBoundingClientRect())} disabled={busy}>
+            <PlusIcon />{t('run.readd')}
+          </button>
+          {canDelete && (
+            <button className="dsh-automation-icon-button" type="button" aria-label={t('run.delete')} title={t('run.delete')} onClick={() => onConfirmDelete(run.id)} disabled={busy}>
+              <TrashIcon />
+            </button>
+          )}
+        </div>
       )}
     </article>
   )
@@ -756,7 +791,7 @@ export function RecentRun({ run, now, t, busy, onOpen, onMarkRead }: {
 /** Native conversation view: all data and effects arrive through the slot's four shares. */
 export function AutomationView({
   t, useAutomationState, refresh, createAutomation, updateAutomation, mutateAutomation, runNow, markRunRead,
-  loadModelCatalog, openSession,
+  deleteRun, loadModelCatalog, openSession, refreshSessions,
 }: AutomationViewProps): JSX.Element {
   const state = useAutomationState(value => value)
   const [showCreate, setShowCreate] = useState(false)
@@ -764,6 +799,7 @@ export function AutomationView({
   const [busyKey, setBusyKey] = useState<string>()
   const [actionError, setActionError] = useState<string>()
   const [confirmDeleteId, setConfirmDeleteId] = useState<string>()
+  const [confirmDeleteRunId, setConfirmDeleteRunId] = useState<string>()
   const [sortKey, setSortKey] = useState<AutomationSortKey>(() => readSortDefault(SORT_STORAGE, WORKSPACE_SORT_DEFAULT_KEY)?.key ?? 'created')
   const [sortDirection, setSortDirection] = useState<AutomationSortDirection>(() => readSortDefault(SORT_STORAGE, WORKSPACE_SORT_DEFAULT_KEY)?.direction ?? 'desc')
   const [taskView, setTaskView] = useState<TaskView>('today')
@@ -772,16 +808,31 @@ export function AutomationView({
   const [selectedDate, setSelectedDate] = useState<Date>()
   const [draft, setDraft] = useState<AutomationFormState | undefined>(undefined)
   const [draftClosePrompt, setDraftClosePrompt] = useState(false)
+  const [formSeed, setFormSeed] = useState(0)
   const draftRef = useRef<{ form: AutomationFormState | undefined }>({ form: undefined })
   const createAnchorRef = useRef<DOMRect | undefined>(undefined)
   const editAnchorRef = useRef<DOMRect | undefined>(undefined)
+  const runsSignatureRef = useRef('')
   useEffect(() => {
-    void refresh().catch(() => undefined)
-    const timer = window.setInterval(() => { void refresh().catch(() => undefined) }, POLL_INTERVAL_MS)
+    // Refresh the global session list whenever a run starts or settles, so
+    // the automation's conversation appears in the workspace list without
+    // having to open it from the run record first.
+    const syncSessions = (): void => {
+      const runs = latestSnapshotRef.current?.runs ?? []
+      const signature = runs.map(run => `${run.id}:${run.status}`).join('|')
+      if (signature !== runsSignatureRef.current) {
+        runsSignatureRef.current = signature
+        void refreshSessions().catch(() => undefined)
+      }
+    }
+    void refresh().then(syncSessions, syncSessions)
+    const timer = window.setInterval(() => { void refresh().then(syncSessions, syncSessions) }, POLL_INTERVAL_MS)
     return () => { window.clearInterval(timer) }
-  }, [refresh])
+  }, [refresh, refreshSessions])
 
   const snapshot = state.snapshot
+  const latestSnapshotRef = useRef(snapshot)
+  latestSnapshotRef.current = snapshot
   const draftKey = snapshot === undefined
     ? undefined
     : `dsh-automation.draft.workspace.${snapshot.scope.workspaceId ?? 'local'}`
@@ -841,6 +892,7 @@ export function AutomationView({
     return automations.filter(automation => automation.nextRunAt !== undefined
       && isSameLocalDay(new Date(automation.nextRunAt), pickedDate))
   }, [automations, pickedDate, rangeView, taskView, todayAutomations])
+  const automationIdSet = useMemo(() => new Set(automations.map(item => item.id)), [automations])
 
   const selectRange = (range: CalendarRangeView): void => {
     setRangeView(range)
@@ -928,6 +980,35 @@ export function AutomationView({
   const onMarkRead = (runId: string): void => {
     void perform(actionKey('read', runId), () => markRunRead(runId))
   }
+  const onReaddRun = (run: AutomationRunViewModel, anchor?: DOMRect): void => {
+    // Seed the create form from the run's source automation when it still
+    // exists, or from the durable run snapshot when it was deleted.
+    const automation = snapshot?.automations.find(item => item.id === run.automationId)
+    const form = automation !== undefined
+      ? formStateFromAutomation(automation)
+      : {
+          ...defaultFormState(),
+          prompt: run.promptSnapshot ?? '',
+          provider: run.provider ?? null,
+          model: run.model ?? null,
+          reasoningEffort: run.reasoningEffort ?? null,
+          permission: run.permission ?? 'read-only',
+        }
+    createAnchorRef.current = anchor
+    if (draftKey !== undefined) writeDraft(SORT_STORAGE, draftKey, form)
+    draftRef.current.form = form
+    setDraft(form)
+    setDraftClosePrompt(false)
+    setEditingAutomation(undefined)
+    setFormSeed(value => value + 1)
+    setShowCreate(true)
+  }
+  const onDeleteRun = (runId: string): void => {
+    void perform(actionKey('delete-run', runId), async () => {
+      await deleteRun(runId)
+      setConfirmDeleteRunId(undefined)
+    })
+  }
   const onCreate = async (input: ReturnType<typeof buildCreateInput>): Promise<void> => {
     await perform(actionKey('create'), async () => {
       await createAutomation(input)
@@ -1014,6 +1095,7 @@ export function AutomationView({
             </div>
           )}
           <AutomationForm
+            key={`create:${formSeed}`}
             mode="create"
             initial={draft}
             onSaveDraft={saveDraft}
@@ -1198,25 +1280,38 @@ export function AutomationView({
           <div className="dsh-automation-runs-panel">
             <div className="dsh-automation-runs-head">
               <h2>{t('section.runs')}</h2>
-              <span className="dsh-automation-runs-attention">
-                <AlertIcon />
-                {t('stats.attention')}
-                <b>{stats?.attention ?? 0}</b>
+              <span className={`dsh-automation-runs-status${(stats?.attention ?? 0) > 0 ? ' is-error' : ''}`}>
+                <span className="dsh-automation-runs-status-label">{t('stats.currentStatus')}</span>
+                <span className="dsh-automation-runs-status-value">
+                  <i className="dsh-automation-runs-status-icon" aria-hidden="true">{(stats?.attention ?? 0) > 0 ? <AlertIcon /> : <CheckIcon />}</i>
+                  {(stats?.attention ?? 0) > 0 ? t('stats.attention') : t('stats.noAttention')}
+                  {(stats?.attention ?? 0) > 0 && <b>{stats?.attention ?? 0}</b>}
+                </span>
               </span>
             </div>
             {snapshot.runs.length === 0
               ? <div className="dsh-automation-runs-empty">{t('runs.empty')}</div>
-              : <div className="dsh-automation-run-list">{snapshot.runs.slice(0, 12).map(run => (
-                  <RecentRun
-                    key={run.id}
-                    run={run}
-                    now={now}
-                    t={t}
-                    busy={busyKey?.endsWith(`:${run.id}`) === true}
-                    onOpen={onOpenSession}
-                    onMarkRead={onMarkRead}
-                  />
-                ))}</div>}
+              : <div className="dsh-automation-run-list">{snapshot.runs.map(run => {
+                  const automationMissing = !automationIdSet.has(run.automationId)
+                  return (
+                    <RecentRun
+                      key={run.id}
+                      run={run}
+                      now={now}
+                      t={t}
+                      busy={busyKey === actionKey('run', run.id)
+                        || busyKey === actionKey('delete-run', run.id)
+                        || busyKey === actionKey('read', run.id)}
+                      automationMissing={automationMissing}
+                      confirmingDelete={confirmDeleteRunId === run.id}
+                      onOpen={onOpenSession}
+                      onMarkRead={onMarkRead}
+                      onReadd={onReaddRun}
+                      onConfirmDelete={setConfirmDeleteRunId}
+                      onDelete={onDeleteRun}
+                    />
+                  )
+                })}</div>}
           </div>
         </aside>
       </div>
