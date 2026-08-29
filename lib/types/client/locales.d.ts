@@ -61,7 +61,7 @@ export declare const en: {
     readonly 'empty.dayNone': "No automations scheduled for this day";
     readonly 'runs.empty': "No runs yet. Trigger an automation now or wait for its schedule.";
     readonly 'form.title': "Create an automation";
-    readonly 'form.subtitle': "Write a self-contained prompt: scheduled runs do not inherit this conversation.";
+    readonly 'form.subtitle': "Please fill in the complete task prompt: new tasks do not inherit the current conversation";
     readonly 'form.editTitle': "Edit automation";
     readonly 'form.editSubtitle': "Review the complete prompt, schedule, and permission boundary before saving.";
     readonly 'form.name': "Name";

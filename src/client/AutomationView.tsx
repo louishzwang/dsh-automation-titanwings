@@ -161,25 +161,33 @@ interface FormCommonProps {
   readonly onCancel: () => void
 }
 
-function initialFloatBox(): { readonly x: number; readonly y: number; readonly w: number; readonly h: number } {
-  if (typeof window === 'undefined') return { x: 0, y: 0, w: 760, h: 620 }
-  const w = Math.min(760, window.innerWidth - 32)
-  const h = Math.min(620, window.innerHeight - 48)
-  return {
-    x: Math.max(16, Math.round((window.innerWidth - w) / 2)),
-    y: Math.max(16, Math.round((window.innerHeight - h) / 2)),
-    w,
-    h,
+function initialFloatBox(anchor?: DOMRect): { readonly x: number; readonly y: number; readonly w: number; readonly h: number } {
+  const W = 480
+  const H = 645
+  if (typeof window === 'undefined') return { x: 0, y: 0, w: W, h: H }
+  const w = Math.max(480, Math.min(W, window.innerWidth - 32))
+  const h = Math.min(H, window.innerHeight - 48)
+  let x = Math.max(16, Math.round((window.innerWidth - w) / 2))
+  let y = Math.max(16, Math.round((window.innerHeight - h) / 2))
+  if (anchor !== undefined) {
+    x = Math.round(anchor.right + 8)
+    y = Math.round(anchor.bottom + 8)
+    if (y + h > window.innerHeight - 8) y = Math.round(anchor.top - h - 8)
+    if (x + w > window.innerWidth - 8) x = Math.max(8, Math.round(anchor.left - w - 8))
+    if (x < 8) x = 8
+    if (y < 8) y = 8
   }
+  return { x, y, w, h }
 }
 
-function AutomationFloat({ label, busy, onClose, children }: {
+function AutomationFloat({ label, busy, onClose, anchor, children }: {
   readonly label: string
   readonly busy: boolean
   readonly onClose: () => void
+  readonly anchor: DOMRect | undefined
   readonly children: ReactNode
 }): JSX.Element {
-  const [box, setBox] = useState(initialFloatBox)
+  const [box, setBox] = useState(() => initialFloatBox(anchor))
   const dragRef = useRef<{
     readonly mode: 'move' | 'resize'
     readonly startX: number
@@ -383,11 +391,8 @@ function AutomationForm(props: AutomationFormProps): JSX.Element {
   return (
     <form className="dsh-automation-create" onSubmit={submit}>
       <div className="dsh-automation-create-heading">
-        <div>
-          <span className="dsh-automation-kicker">{t('header.eyebrow')}</span>
-          <h2>{t(props.mode === 'create' ? 'form.title' : 'form.editTitle')}</h2>
-          <p>{t(props.mode === 'create' ? 'form.subtitle' : 'form.editSubtitle')}</p>
-        </div>
+        <h2>{t(props.mode === 'create' ? 'form.title' : 'form.editTitle')}</h2>
+        {props.mode === 'edit' && <p>{t('form.editSubtitle')}</p>}
         <button className="dsh-automation-button dsh-automation-button--ghost" type="button" onClick={onCancel} disabled={busy}>
           {t('form.cancel')}
         </button>
@@ -399,7 +404,7 @@ function AutomationForm(props: AutomationFormProps): JSX.Element {
           <input value={form.name} maxLength={80} placeholder={t('form.namePlaceholder')} autoFocus onChange={event => update('name', event.currentTarget.value)} />
         </label>
         <label className="dsh-automation-field dsh-automation-field--wide">
-          <span>{t('form.prompt')}</span>
+          <span>{t('form.prompt')}<small className="dsh-automation-field-note">{t('form.subtitle')}</small></span>
           <textarea value={form.prompt} maxLength={12_000} rows={props.mode === 'edit' ? 8 : 4} placeholder={t('form.promptPlaceholder')} onChange={event => update('prompt', event.currentTarget.value)} />
         </label>
 
@@ -615,7 +620,7 @@ interface AutomationCardProps {
   readonly busyKey: string | undefined
   readonly confirmingDelete: boolean
   readonly onConfirmDelete: (id?: string) => void
-  readonly onEdit: (automation: AutomationViewModel) => void
+  readonly onEdit: (automation: AutomationViewModel, anchor?: DOMRect) => void
   readonly onMutate: (id: string, mutation: 'pause' | 'resume' | 'delete') => void
   readonly onRun: (id: string) => void
 }
@@ -685,7 +690,7 @@ function AutomationCard(props: AutomationCardProps): JSX.Element {
         </div>
       ) : (
         <div className="dsh-automation-card-actions">
-          <button className="dsh-automation-button dsh-automation-button--ghost" type="button" onClick={() => onEdit(automation)} disabled={isBusy}>
+          <button className="dsh-automation-button dsh-automation-button--ghost" type="button" onClick={(event) => onEdit(automation, event.currentTarget.getBoundingClientRect())} disabled={isBusy}>
             <PencilIcon />{t('card.edit')}
           </button>
           <button className="dsh-automation-button dsh-automation-button--ghost" type="button" onClick={() => onRun(automation.id)} disabled={isBusy}>
@@ -768,6 +773,8 @@ export function AutomationView({
   const [draft, setDraft] = useState<AutomationFormState | undefined>(undefined)
   const [draftClosePrompt, setDraftClosePrompt] = useState(false)
   const draftRef = useRef<{ form: AutomationFormState | undefined }>({ form: undefined })
+  const createAnchorRef = useRef<DOMRect | undefined>(undefined)
+  const editAnchorRef = useRef<DOMRect | undefined>(undefined)
   useEffect(() => {
     void refresh().catch(() => undefined)
     const timer = window.setInterval(() => { void refresh().catch(() => undefined) }, POLL_INTERVAL_MS)
@@ -866,12 +873,23 @@ export function AutomationView({
     setCalendarCursor(rangeView === 'week' ? startOfLocalWeek(base) : base)
     setSelectedDate(startOfLocalDay(base))
   }
-  const toggleCreate = (): void => {
+  const openCreate = (event: ReactMouseEvent<HTMLElement>): void => {
     setEditingAutomation(undefined)
     if (showCreate) {
       closeCreate()
       return
     }
+    createAnchorRef.current = event.currentTarget.getBoundingClientRect()
+    if (draftKey !== undefined) setDraft(readDraft(SORT_STORAGE, draftKey))
+    setShowCreate(true)
+  }
+  const toggleCreate = (event: ReactMouseEvent<HTMLButtonElement>): void => {
+    setEditingAutomation(undefined)
+    if (showCreate) {
+      closeCreate()
+      return
+    }
+    createAnchorRef.current = event.currentTarget.getBoundingClientRect()
     if (draftKey !== undefined) setDraft(readDraft(SORT_STORAGE, draftKey))
     setShowCreate(true)
   }
@@ -928,9 +946,10 @@ export function AutomationView({
       setEditingAutomation(undefined)
     })
   }
-  const onEdit = (automation: AutomationViewModel): void => {
+  const onEdit = (automation: AutomationViewModel, anchor?: DOMRect): void => {
     setShowCreate(false)
     setConfirmDeleteId(undefined)
+    editAnchorRef.current = anchor
     setEditingAutomation(automation)
   }
 
@@ -983,7 +1002,7 @@ export function AutomationView({
       </header>
 
       {showCreate && (
-        <AutomationFloat label={t('form.title')} busy={busyKey === actionKey('create')} onClose={closeCreate}>
+        <AutomationFloat label={t('form.title')} busy={busyKey === actionKey('create')} onClose={closeCreate} anchor={createAnchorRef.current}>
           {draftClosePrompt && (
             <div className="dsh-automation-draft-prompt">
               <span>{t('form.draftPrompt')}</span>
@@ -1008,7 +1027,7 @@ export function AutomationView({
       )}
 
       {editingAutomation !== undefined && (
-        <AutomationFloat label={t('form.editTitle')} busy={busyKey === actionKey('update', editingAutomation.id)} onClose={() => setEditingAutomation(undefined)}>
+        <AutomationFloat label={t('form.editTitle')} busy={busyKey === actionKey('update', editingAutomation.id)} onClose={() => setEditingAutomation(undefined)} anchor={editAnchorRef.current}>
           <AutomationForm
             key={`${editingAutomation.id}:${editingAutomation.revision}`}
             mode="edit"
@@ -1141,13 +1160,13 @@ export function AutomationView({
               <span><AutomationIcon /></span>
               <h3>{t('empty.title')}</h3>
               <p>{t('empty.body')}</p>
-              <button className="dsh-automation-button dsh-automation-button--primary" type="button" onClick={() => setShowCreate(true)}><PlusIcon />{t('empty.action')}</button>
+              <button className="dsh-automation-button dsh-automation-button--primary" type="button" onClick={openCreate}>{showCreate ? <><PauseIcon />{t('header.closeCreate')}</> : <><PlusIcon />{t('empty.action')}</>}</button>
             </div>
           ) : visibleAutomations.length === 0 ? (
             <div className="dsh-automation-empty">
               <span><CalendarIcon /></span>
               <h3>{taskView === 'today' ? t('empty.todayNone') : t('empty.dayNone')}</h3>
-              <button className="dsh-automation-button dsh-automation-button--primary" type="button" onClick={() => setShowCreate(true)}><PlusIcon />{t('header.create')}</button>
+              <button className="dsh-automation-button dsh-automation-button--primary" type="button" onClick={openCreate}>{showCreate ? <><PauseIcon />{t('header.closeCreate')}</> : <><PlusIcon />{t('header.create')}</>}</button>
             </div>
           ) : (
             <div className="dsh-automation-card-list">
@@ -1170,7 +1189,7 @@ export function AutomationView({
 
           {visibleAutomations.length > 0 && (
             <div className="dsh-automation-empty dsh-automation-empty--footer">
-              <button className="dsh-automation-button dsh-automation-button--primary" type="button" onClick={() => setShowCreate(true)}><PlusIcon />{t('header.create')}</button>
+              <button className="dsh-automation-button dsh-automation-button--primary" type="button" onClick={openCreate}>{showCreate ? <><PauseIcon />{t('header.closeCreate')}</> : <><PlusIcon />{t('header.create')}</>}</button>
             </div>
           )}
         </section>
