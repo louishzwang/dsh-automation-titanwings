@@ -265,7 +265,7 @@ test('Host-wide model catalog uses the official API envelope and preserves parti
   }), /host offline/)
 })
 
-test('deriveOverview counts active definitions and unread failures', () => {
+test('deriveOverview counts unread failures plus every skipped and cancelled run', () => {
   const snapshot: AutomationSnapshot = {
     scope: { cwd: '/workspace' },
     serverNow: '2026-08-13T00:00:00.000Z',
@@ -289,12 +289,14 @@ test('deriveOverview counts active definitions and unread failures', () => {
       { id: 'r1', automationId: 'a1', automationName: 'A', status: 'failed', trigger: 'schedule', scheduledFor: '2026-08-12T09:00:00.000Z', sessionArchived: false },
       { id: 'r2', automationId: 'a1', automationName: 'A', status: 'failed', trigger: 'schedule', scheduledFor: '2026-08-11T09:00:00.000Z', sessionArchived: false, unread: false },
       { id: 'r3', automationId: 'a2', automationName: 'B', status: 'succeeded', trigger: 'manual', scheduledFor: '2026-08-12T10:00:00.000Z', sessionArchived: false },
+      { id: 'r4', automationId: 'a1', automationName: 'A', status: 'skipped', trigger: 'schedule', scheduledFor: '2026-08-12T11:00:00.000Z', sessionArchived: false, unread: false },
+      { id: 'r5', automationId: 'a1', automationName: 'A', status: 'cancelled', trigger: 'manual', scheduledFor: '2026-08-12T12:00:00.000Z', sessionArchived: false, unread: false },
     ],
   }
   assert.deepEqual(deriveOverview(snapshot), {
     total: 2,
     active: 1,
-    attention: 1,
+    attention: 3,
     nextRunAt: '2026-08-13T09:00:00.000Z',
   })
 })
@@ -498,6 +500,59 @@ test('run cards expose re-add and record-delete actions with a confirm step', ()
 
   const confirming = render({ confirmingDelete: true })
   assert.match(confirming.filter(node => node.type === 'button').map(node => String(node.props?.children)).join(' | '), /Confirm delete/)
+})
+
+test('skipped and cancelled runs never offer mark-reviewed', () => {
+  type RenderedNode = {
+    readonly type?: unknown
+    readonly props?: { readonly className?: string; readonly children?: unknown }
+  }
+  const flatten = (node: unknown): RenderedNode[] => {
+    if (node === null || node === undefined || typeof node === 'string' || typeof node === 'number' || typeof node === 'boolean') return []
+    if (Array.isArray(node)) return node.flatMap(flatten)
+    const element = node as RenderedNode
+    if (typeof element !== 'object') return []
+    return [element, ...flatten(element.props?.children)]
+  }
+  const render = (status: 'skipped' | 'cancelled'): RenderedNode[] => flatten(RecentRun({
+    run: {
+      id: 'run-problem', automationId: 'automation-1', automationName: 'Problem run',
+      status, trigger: 'schedule' as const,
+      scheduledFor: '2026-08-17T00:00:00.000Z', sessionArchived: false, unread: true,
+    },
+    now: new Date('2026-08-17T00:00:01.000Z'), t, busy: false,
+    automationMissing: false, confirmingDelete: false,
+    onOpen: () => {}, onMarkRead: () => {}, onReadd: () => {},
+    onConfirmDelete: () => {}, onDelete: () => {},
+  }) as unknown)
+  for (const status of ['skipped', 'cancelled'] as const) {
+    const nodes = render(status)
+    assert.equal(nodes.some(node => node.type === 'button'
+      && String(node.props?.children).includes('Mark reviewed')), false)
+  }
+})
+
+test('refresh reports an unavailable phase while the source session has no live Agent', async () => {
+  let fail = true
+  const rpc = {
+    call: async (_channel: string, endpoint: string) => {
+      if (endpoint === 'snapshot' && fail) {
+        throw new Error('The automation UI/tool requires a live source session.')
+      }
+      return {
+        ok: true,
+        value: { scope: { cwd: '/workspace' }, automations: [], runs: [], serverNow: new Date().toISOString() },
+      }
+    },
+  }
+  const runtime = createAutomationRuntime(rpc, 'session-fresh')
+
+  await assert.rejects(() => runtime.refresh(), /requires a live source session/)
+  assert.equal(runtime.source.getSnapshot().phase, 'unavailable')
+
+  fail = false
+  await runtime.refresh()
+  assert.equal(runtime.source.getSnapshot().phase, 'ready')
 })
 
 test('archive and delete run RPCs carry the run id and refresh the snapshot', async () => {

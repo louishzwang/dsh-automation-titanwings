@@ -58,6 +58,7 @@ import type {
 } from './protocol.js'
 
 const POLL_INTERVAL_MS = 15_000
+const RETRY_FAST_MS = 3_000
 const WEEKDAYS = [1, 2, 3, 4, 5, 6, 7] as const
 const FALLBACK_CITY_ZONES = [
   'UTC', 'Asia/Shanghai', 'Asia/Hong_Kong', 'Asia/Tokyo', 'Asia/Singapore',
@@ -724,8 +725,7 @@ export function RecentRun({ run, now, t, busy, automationMissing, confirmingDele
 }): JSX.Element {
   const timestamp = run.finishedAt ?? run.startedAt ?? run.scheduledFor
   const canMarkRead = run.unread !== false
-    && (run.status === 'failed' || run.status === 'interrupted'
-      || run.status === 'skipped' || run.status === 'cancelled')
+    && (run.status === 'failed' || run.status === 'interrupted')
   const canDelete = run.status !== 'queued' && run.status !== 'running'
   return (
     <article className="dsh-automation-run">
@@ -813,6 +813,8 @@ export function AutomationView({
   const createAnchorRef = useRef<DOMRect | undefined>(undefined)
   const editAnchorRef = useRef<DOMRect | undefined>(undefined)
   const runsSignatureRef = useRef('')
+  const phaseRef = useRef(state.phase)
+  phaseRef.current = state.phase
   useEffect(() => {
     // Refresh the global session list whenever a run starts or settles, so
     // the automation's conversation appears in the workspace list without
@@ -825,9 +827,20 @@ export function AutomationView({
         void refreshSessions().catch(() => undefined)
       }
     }
-    void refresh().then(syncSessions, syncSessions)
-    const timer = window.setInterval(() => { void refresh().then(syncSessions, syncSessions) }, POLL_INTERVAL_MS)
-    return () => { window.clearInterval(timer) }
+    const poll = (): void => { void refresh().then(syncSessions, syncSessions) }
+    poll()
+    let timer: number | undefined
+    // Recover quickly from a not-yet-live source session and transient errors;
+    // settle back to the regular cadence once the snapshot is ready.
+    const schedule = (): void => {
+      const phase = phaseRef.current
+      timer = window.setTimeout(() => {
+        poll()
+        schedule()
+      }, phase === 'unavailable' || phase === 'error' ? RETRY_FAST_MS : POLL_INTERVAL_MS)
+    }
+    schedule()
+    return () => { if (timer !== undefined) window.clearTimeout(timer) }
   }, [refresh, refreshSessions])
 
   const snapshot = state.snapshot
@@ -1043,6 +1056,19 @@ export function AutomationView({
     )
   }
 
+  if (snapshot === undefined && state.phase === 'unavailable') {
+    return (
+      <div className="dsh-automation-shell dsh-automation-centered" data-conversation-composer-overlay="">
+        <span className="dsh-automation-error-icon"><AutomationIcon /></span>
+        <h2>{t('unavailable.title')}</h2>
+        <p>{t('unavailable.body')}</p>
+        <button className="dsh-automation-button dsh-automation-button--primary" type="button" onClick={() => { void refresh().catch(() => undefined) }}>
+          <RefreshIcon />{t('error.retry')}
+        </button>
+      </div>
+    )
+  }
+
   if (snapshot === undefined) {
     return (
       <div className="dsh-automation-shell dsh-automation-centered" data-conversation-composer-overlay="">
@@ -1123,7 +1149,7 @@ export function AutomationView({
         </AutomationFloat>
       )}
 
-      {(actionError !== undefined || state.error !== undefined) && (
+      {(actionError !== undefined || (state.error !== undefined && state.phase !== 'unavailable')) && (
         <div className="dsh-automation-inline-error" role="alert"><AlertIcon />{actionError ?? state.error}</div>
       )}
 

@@ -170,6 +170,8 @@ export declare const en: {
     readonly 'error.title': "Automations could not be loaded";
     readonly 'error.retry': "Try again";
     readonly 'error.action': "The action failed. Please try again.";
+    readonly 'unavailable.title': "This conversation has not started";
+    readonly 'unavailable.body': "Send a message in this conversation, or switch to a conversation that is already running. The automation panel recovers automatically.";
     readonly 'time.now': "now";
     readonly 'time.minuteAgo': "{count}m ago";
     readonly 'time.hourAgo': "{count}h ago";

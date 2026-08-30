@@ -502,6 +502,7 @@ export class AutomationService {
         status: 'failed',
         finishedAt: toIso(),
         error: { code: 'definition_deleted', message: 'The automation was deleted before this run started.' },
+        unread: true,
       })
       await this.pruneWorkspaceHistory(run.targetSnapshot.workspaceId)
       return

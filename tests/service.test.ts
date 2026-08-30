@@ -713,6 +713,7 @@ test('a queued run whose definition is deleted still enforces terminal retention
   const related = [...domain.runs.records.values()]
     .filter(run => run.automationId === definition.id)
   assert.equal(domain.runs.get(queued.id)?.error?.code, 'definition_deleted')
+  assert.equal(domain.runs.get(queued.id)?.unread, true)
   assert.deepEqual(related.map(run => run.id), [queued.id])
   await service.dispose()
 })

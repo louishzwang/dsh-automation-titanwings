@@ -1,7 +1,7 @@
 import type { ClientLlmApi, ClientRpc } from './contracts.js';
 import type { AutomationSnapshot, CreateAutomationInput, MutateRequest, UpdateAutomationInput, ModelCatalog } from './protocol.js';
 export interface AutomationClientState {
-    readonly phase: 'idle' | 'loading' | 'ready' | 'error';
+    readonly phase: 'idle' | 'loading' | 'ready' | 'error' | 'unavailable';
     readonly snapshot?: AutomationSnapshot;
     readonly error?: string;
     readonly refreshedAt?: number;

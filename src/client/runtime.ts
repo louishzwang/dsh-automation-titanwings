@@ -18,7 +18,7 @@ import { unwrapRpcResult } from './protocol.js'
 const CHANNEL = '/dsh-automation'
 
 export interface AutomationClientState {
-  readonly phase: 'idle' | 'loading' | 'ready' | 'error'
+  readonly phase: 'idle' | 'loading' | 'ready' | 'error' | 'unavailable'
   readonly snapshot?: AutomationSnapshot
   readonly error?: string
   readonly refreshedAt?: number
@@ -83,10 +83,15 @@ export function createAutomationRuntime(rpc: ClientRpc, sessionId: string): Auto
         publish({ phase: 'ready', snapshot, refreshedAt: Date.now() })
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
+        // The source conversation has no live Agent yet (switching to a
+        // fresh/resuming conversation): show a friendly prompt instead of a
+        // hard error and let the poll recover once the Agent exists.
+        const unavailable = /requires a live source session/.test(message)
+        const phase = unavailable ? 'unavailable' : 'error'
         publish(previous === undefined
-          ? { phase: 'error', error: message }
+          ? { phase, error: message }
           : {
-              phase: 'error',
+              phase,
               snapshot: previous,
               error: message,
               ...(state.refreshedAt === undefined ? {} : { refreshedAt: state.refreshedAt }),

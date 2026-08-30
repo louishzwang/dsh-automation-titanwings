@@ -304,7 +304,10 @@ export function reasoningEffortChoices(
   return [{ id: currentEffort, name: currentEffort, unavailable: true }, ...choices]
 }
 
-const ATTENTION_STATUSES = new Set<AutomationRunStatus>(['failed', 'interrupted'])
+/** Reviewable problems: unread failures/interruptions that 标记已处理 can dismiss. */
+const REVIEWABLE_ATTENTION_STATUSES = new Set<AutomationRunStatus>(['failed', 'interrupted'])
+/** Skipped/cancelled runs always need handling until the record is deleted. */
+const ALWAYS_ATTENTION_STATUSES = new Set<AutomationRunStatus>(['skipped', 'cancelled'])
 
 export interface OverviewStats {
   readonly total: number
@@ -424,7 +427,8 @@ export function deriveOverview(snapshot: AutomationSnapshot): OverviewStats {
   return {
     total: snapshot.automations.length,
     active: snapshot.automations.filter(item => item.status === 'active').length,
-    attention: snapshot.runs.filter(run => ATTENTION_STATUSES.has(run.status) && run.unread !== false).length,
+    attention: snapshot.runs.filter(run => ALWAYS_ATTENTION_STATUSES.has(run.status)
+      || (REVIEWABLE_ATTENTION_STATUSES.has(run.status) && run.unread !== false)).length,
     ...(next === undefined ? {} : { nextRunAt: next }),
   }
 }
