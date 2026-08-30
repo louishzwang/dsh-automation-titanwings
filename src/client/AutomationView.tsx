@@ -725,7 +725,8 @@ export function RecentRun({ run, now, t, busy, automationMissing, confirmingDele
 }): JSX.Element {
   const timestamp = run.finishedAt ?? run.startedAt ?? run.scheduledFor
   const canMarkRead = run.unread !== false
-    && (run.status === 'failed' || run.status === 'interrupted')
+    && (run.status === 'failed' || run.status === 'interrupted'
+      || run.status === 'skipped' || run.status === 'cancelled')
   const canDelete = run.status !== 'queued' && run.status !== 'running'
   return (
     <article className="dsh-automation-run">

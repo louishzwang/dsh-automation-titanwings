@@ -114,6 +114,7 @@ export class AutomationService {
       service.definitions = domain.table('definitions') as KvTable<string, AutomationDefinition>
       service.runs = domain.table('runs') as KvTable<string, AutomationRun>
       await service.recoverInterruptedRuns()
+      await service.flagLegacyProblemRuns()
       await service.archiveTerminalRunSessions()
       await service.pruneAllHistory()
       return service
@@ -317,7 +318,11 @@ export class AutomationService {
         throw new Error('The automation run belongs to another workspace.')
       }
       if (!run.unread) return run
-      const next = { ...run, unread: false }
+      const next = {
+        ...run,
+        unread: false,
+        ...(run.reviewedAt === undefined ? { reviewedAt: toIso() } : {}),
+      }
       await this.runs.put(runId, next)
       return next
     }, signal)
@@ -435,6 +440,7 @@ export class AutomationService {
         status: 'skipped',
         finishedAt: now,
         error: reason,
+        unread: true,
       })
       await this.pruneWorkspaceHistory(candidate.targetSnapshot.workspaceId)
       return
@@ -593,6 +599,19 @@ export class AutomationService {
         },
         unread: true,
       })
+    }
+  }
+
+  /**
+   * Skipped/cancelled runs recorded before unread tracking never asked for
+   * attention. Surface them once: records the user explicitly marked as
+   * reviewed carry `reviewedAt`, so they stay dismissed across restarts.
+   */
+  private async flagLegacyProblemRuns(): Promise<void> {
+    for (const [id, run] of this.runs.entries()) {
+      if (run.status !== 'skipped' && run.status !== 'cancelled') continue
+      if (run.unread || run.reviewedAt !== undefined) continue
+      await this.runs.put(id, { ...run, unread: true })
     }
   }
 

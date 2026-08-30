@@ -104,6 +104,8 @@ export interface AutomationRun {
   readonly summary: string | null
   readonly error: AutomationRunError | null
   readonly unread: boolean
+  /** Set when the user marked a problem run as reviewed; absent before that. */
+  readonly reviewedAt?: string | null | undefined
 }
 
 export interface CreateAutomationInput {

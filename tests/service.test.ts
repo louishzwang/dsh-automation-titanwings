@@ -847,6 +847,44 @@ test('deleteRun removes terminal records only and keeps active runs durable', as
   await service.dispose()
 })
 
+test('startup surfaces legacy skipped/cancelled runs once and keeps reviewed ones dismissed', async () => {
+  const definition = storedDefinition('2026-08-13T00:00:00Z')
+  const legacySkipped: AutomationRun = {
+    ...createManualRun(definition, '2026-08-13T00:01:00Z', 'legacy-skipped'),
+    status: 'skipped',
+    finishedAt: '2026-08-13T00:02:00Z',
+    error: { code: 'misfire', message: 'Skipped because the host resumed outside the catch-up window.' },
+  }
+  const reviewedCancelled: AutomationRun = {
+    ...createManualRun(definition, '2026-08-13T00:03:00Z', 'reviewed-cancelled'),
+    status: 'cancelled',
+    finishedAt: '2026-08-13T00:04:00Z',
+    error: { code: 'cancelled', message: 'The automation was cancelled.' },
+    unread: false,
+    reviewedAt: '2026-08-14T00:00:00Z',
+  }
+  const { service, domain } = await harness({
+    definitions: [definition],
+    runs: [legacySkipped, reviewedCancelled],
+  })
+
+  assert.equal(domain.runs.get(legacySkipped.id)?.unread, true)
+  assert.equal(domain.runs.get(reviewedCancelled.id)?.unread, false)
+
+  const marked = await service.markRead(scope, legacySkipped.id)
+  assert.equal(marked.unread, false)
+  assert.equal(typeof marked.reviewedAt, 'string')
+
+  // Re-opening must not resurrect the dismissed record.
+  await service.dispose()
+  const reopened = await harness({
+    definitions: [definition],
+    runs: [...domain.runs.records.values()],
+  })
+  assert.equal(reopened.domain.runs.get(legacySkipped.id)?.unread, false)
+  await reopened.service.dispose()
+})
+
 test('scheduler materializes only the latest due interval and records overlap', async () => {
   const anchorMs = Date.now() - 6 * 60_000
   const anchor = new Date(anchorMs).toISOString()
@@ -869,6 +907,7 @@ test('scheduler materializes only the latest due interval and records overlap', 
     const scheduled = [...domain.runs.records.values()].find(run => run.trigger === 'schedule')!
     assert.equal(manual.status, 'queued')
     assert.equal(scheduled.status, 'skipped')
+    assert.equal(scheduled.unread, true)
     assert.equal(scheduled.error?.code, 'overlap')
     assert.equal(Date.parse(scheduled.scheduledFor), Date.parse(anchor) + 5 * 60_000)
   } finally {

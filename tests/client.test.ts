@@ -265,7 +265,7 @@ test('Host-wide model catalog uses the official API envelope and preserves parti
   }), /host offline/)
 })
 
-test('deriveOverview counts unread failures plus every skipped and cancelled run', () => {
+test('deriveOverview counts unread problem runs and ignores reviewed ones', () => {
   const snapshot: AutomationSnapshot = {
     scope: { cwd: '/workspace' },
     serverNow: '2026-08-13T00:00:00.000Z',
@@ -289,14 +289,14 @@ test('deriveOverview counts unread failures plus every skipped and cancelled run
       { id: 'r1', automationId: 'a1', automationName: 'A', status: 'failed', trigger: 'schedule', scheduledFor: '2026-08-12T09:00:00.000Z', sessionArchived: false },
       { id: 'r2', automationId: 'a1', automationName: 'A', status: 'failed', trigger: 'schedule', scheduledFor: '2026-08-11T09:00:00.000Z', sessionArchived: false, unread: false },
       { id: 'r3', automationId: 'a2', automationName: 'B', status: 'succeeded', trigger: 'manual', scheduledFor: '2026-08-12T10:00:00.000Z', sessionArchived: false },
-      { id: 'r4', automationId: 'a1', automationName: 'A', status: 'skipped', trigger: 'schedule', scheduledFor: '2026-08-12T11:00:00.000Z', sessionArchived: false, unread: false },
+      { id: 'r4', automationId: 'a1', automationName: 'A', status: 'skipped', trigger: 'schedule', scheduledFor: '2026-08-12T11:00:00.000Z', sessionArchived: false },
       { id: 'r5', automationId: 'a1', automationName: 'A', status: 'cancelled', trigger: 'manual', scheduledFor: '2026-08-12T12:00:00.000Z', sessionArchived: false, unread: false },
     ],
   }
   assert.deepEqual(deriveOverview(snapshot), {
     total: 2,
     active: 1,
-    attention: 3,
+    attention: 2,
     nextRunAt: '2026-08-13T09:00:00.000Z',
   })
 })
@@ -502,7 +502,7 @@ test('run cards expose re-add and record-delete actions with a confirm step', ()
   assert.match(confirming.filter(node => node.type === 'button').map(node => String(node.props?.children)).join(' | '), /Confirm delete/)
 })
 
-test('skipped and cancelled runs never offer mark-reviewed', () => {
+test('skipped and cancelled runs offer mark-reviewed exactly while unread', () => {
   type RenderedNode = {
     readonly type?: unknown
     readonly props?: { readonly className?: string; readonly children?: unknown }
@@ -514,21 +514,22 @@ test('skipped and cancelled runs never offer mark-reviewed', () => {
     if (typeof element !== 'object') return []
     return [element, ...flatten(element.props?.children)]
   }
-  const render = (status: 'skipped' | 'cancelled'): RenderedNode[] => flatten(RecentRun({
+  const render = (status: 'skipped' | 'cancelled', unread: boolean): RenderedNode[] => flatten(RecentRun({
     run: {
       id: 'run-problem', automationId: 'automation-1', automationName: 'Problem run',
       status, trigger: 'schedule' as const,
-      scheduledFor: '2026-08-17T00:00:00.000Z', sessionArchived: false, unread: true,
+      scheduledFor: '2026-08-17T00:00:00.000Z', sessionArchived: false, unread,
     },
     now: new Date('2026-08-17T00:00:01.000Z'), t, busy: false,
     automationMissing: false, confirmingDelete: false,
     onOpen: () => {}, onMarkRead: () => {}, onReadd: () => {},
     onConfirmDelete: () => {}, onDelete: () => {},
   }) as unknown)
+  const offersMarkReviewed = (status: 'skipped' | 'cancelled', unread: boolean): boolean => render(status, unread)
+    .some(node => node.type === 'button' && String(node.props?.children).includes('Mark reviewed'))
   for (const status of ['skipped', 'cancelled'] as const) {
-    const nodes = render(status)
-    assert.equal(nodes.some(node => node.type === 'button'
-      && String(node.props?.children).includes('Mark reviewed')), false)
+    assert.equal(offersMarkReviewed(status, true), true)
+    assert.equal(offersMarkReviewed(status, false), false)
   }
 })
 

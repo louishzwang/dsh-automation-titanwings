@@ -101,6 +101,12 @@ export declare class AutomationService {
     /** Serialize service-level mutations and scheduler admission around domain writes. */
     private serialize;
     private recoverInterruptedRuns;
+    /**
+     * Skipped/cancelled runs recorded before unread tracking never asked for
+     * attention. Surface them once: records the user explicitly marked as
+     * reviewed carry `reviewedAt`, so they stay dismissed across restarts.
+     */
+    private flagLegacyProblemRuns;
     /** Archive terminal run Sessions without changing their durable run result. */
     private archiveRunSession;
     /** Retry terminal Session archival on startup before bounded run pruning. */
