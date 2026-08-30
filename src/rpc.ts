@@ -126,7 +126,7 @@ function errorResult(
     }
   }
   const message = error instanceof Error ? error.message : String(error)
-  const badRequest = /must|required|unknown automation|another workspace|scheduled in the future|already has a queued or running run|not registered|requires a live source session|requires an explicit provider|requires a pinned provider|has no workspace|request was cancelled|changed since it was opened/.test(message)
+  const badRequest = /must|required|unknown automation|another workspace|scheduled in the future|already has a queued or running run|still queued or running|has no Session|not registered|requires a live source session|requires an explicit provider|requires a pinned provider|has no workspace|request was cancelled|changed since it was opened/.test(message)
   return {
     ok: false,
     error: {
@@ -186,6 +186,13 @@ async function snapshotValue(service: AutomationService, payload: Record<string,
       ...(run.summary === null ? {} : { summary: run.summary }),
       ...(run.error === null ? {} : { error: run.error.message }),
       unread: run.unread,
+      // Durable re-add source: the prompt and model/permission target captured
+      // when the run started, so a deleted automation can still be rebuilt.
+      promptSnapshot: run.promptSnapshot,
+      provider: run.targetSnapshot.provider,
+      model: run.targetSnapshot.model,
+      reasoningEffort: run.targetSnapshot.reasoningEffort,
+      permission: run.targetSnapshot.permissionPreset,
     })),
     serverNow: snapshot.generatedAt,
   }
@@ -272,6 +279,14 @@ export function registerAutomationRpc(ctx: RpcContext, service: AutomationServic
         case 'mark-read': {
           const run = await service.markRead(scopeOf(payload), string(payload.runId, 'runId'), signal)
           return { ok: true, value: { runId: run.id, unread: run.unread } }
+        }
+        case 'archive-run': {
+          const run = await service.archiveRun(scopeOf(payload), string(payload.runId, 'runId'), signal)
+          return { ok: true, value: { runId: run.id, sessionArchived: true } }
+        }
+        case 'delete-run': {
+          const value = await service.deleteRun(scopeOf(payload), string(payload.runId, 'runId'), signal)
+          return { ok: true, value }
         }
         default:
           throw new Error(`unknown automation endpoint '${endpoint}'`)

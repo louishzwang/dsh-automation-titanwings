@@ -163,6 +163,21 @@ export async function executeAutomationRun(
     }))
     await handle.agent.whenIdle()
     await workspace.attachSession(sessionId)
+    // Stamp the automation's name as the Session title before the first
+    // message. Automatic title generation only considers human user/message
+    // sources, so an automation-sourced conversation would otherwise fall
+    // back to the workspace name in the conversation list.
+    const runTitle = definition.name.trim()
+    if (runTitle !== '') {
+      const session = handle.agent.session as { readonly append?: (type: string, data: unknown) => unknown }
+      if (session !== undefined && typeof session.append === 'function') {
+        session.append('session/title', {
+          title: runTitle,
+          messageSeqs: [],
+          source: { kind: 'user' },
+        })
+      }
+    }
     const firstSeq = handle.agent.session.seq
     handle.agent.followup(createUserMessage({
       content: [{ type: 'text', text: run.promptSnapshot }],

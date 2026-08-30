@@ -108,6 +108,7 @@ export const automationRunSchema: z.ZodType<AutomationRun> = z.object({
   summary: z.string().nullable(),
   error: z.object({ code: nonBlank, message: nonBlank }).nullable(),
   unread: z.boolean(),
+  reviewedAt: instant.nullable().optional(),
 })
 
 // `defineDomain()` and `domainTable()` are identity helpers in DSH. Keeping the

@@ -83,6 +83,11 @@ export interface AutomationRunViewModel {
     readonly summary?: string;
     readonly error?: string;
     readonly unread?: boolean;
+    readonly promptSnapshot?: string;
+    readonly provider?: string | null;
+    readonly model?: string | null;
+    readonly reasoningEffort?: string | null;
+    readonly permission?: AutomationPermission;
 }
 export interface AutomationSnapshot {
     readonly scope: {
@@ -137,6 +142,14 @@ export interface RunNowRequest {
     readonly automationId: string;
 }
 export interface MarkReadRequest {
+    readonly sessionId: string;
+    readonly runId: string;
+}
+export interface ArchiveRunRequest {
+    readonly sessionId: string;
+    readonly runId: string;
+}
+export interface DeleteRunRequest {
     readonly sessionId: string;
     readonly runId: string;
 }

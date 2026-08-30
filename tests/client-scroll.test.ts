@@ -7,7 +7,7 @@ const styleSource = readFileSync(new URL('../src/client/styles.ts', import.meta.
 
 test('every Automation view state opts into the fixed-height composer-overlay host', () => {
   const roots = viewSource.match(/data-conversation-composer-overlay=""/g) ?? []
-  assert.equal(roots.length, 3, 'loading, error, and ready roots must all declare the host overlay contract')
+  assert.equal(roots.length, 4, 'loading, unavailable, error, and ready roots must all declare the host overlay contract')
 
   const shellRule = styleSource.match(/\.dsh-automation-shell\{([^}]+)\}/)?.[1]
   assert.ok(shellRule, 'the Automation shell rule must exist')

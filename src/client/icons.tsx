@@ -19,7 +19,7 @@ export function PlusIcon(props: IconProps): JSX.Element {
 }
 
 export function RefreshIcon(props: IconProps): JSX.Element {
-  return <IconFrame {...props}><path d="M19 7v5h-5" /><path d="M18.1 15.5A7.5 7.5 0 1 1 19 12" /></IconFrame>
+  return <IconFrame {...props}><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" /><path d="M21 3v5h-5" /></IconFrame>
 }
 
 export function PlayIcon(props: IconProps): JSX.Element {
@@ -56,4 +56,12 @@ export function AlertIcon(props: IconProps): JSX.Element {
 
 export function ChevronIcon(props: IconProps): JSX.Element {
   return <IconFrame {...props}><path d="m8.5 10 3.5 3.5 3.5-3.5" /></IconFrame>
+}
+
+export function ArchiveIcon(props: IconProps): JSX.Element {
+  return <IconFrame {...props}><rect x="4" y="4.2" width="16" height="4.8" rx="1" /><path d="M6.2 9v9.6h11.6V9M9.8 12.6h4.4" /></IconFrame>
+}
+
+export function GlobeIcon(props: IconProps): JSX.Element {
+  return <IconFrame {...props}><circle cx="12" cy="12" r="8.25" /><path d="M3.75 12h16.5" /><path d="M12 3.75c2.6 2.55 3.9 5.55 3.9 8.25s-1.3 5.7-3.9 8.25c-2.6-2.55-3.9-5.55-3.9-8.25S9.4 6.3 12 3.75Z" /></IconFrame>
 }

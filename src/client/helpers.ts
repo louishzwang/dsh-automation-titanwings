@@ -13,6 +13,41 @@ import type {
 
 export type ScheduleKind = 'once' | 'interval' | 'daily' | 'weekly'
 
+export interface DayAutomationCounts {
+  readonly active: number
+  readonly paused: number
+}
+
+const DRAFT_SCHEDULE_KINDS = new Set<ScheduleKind>(['once', 'interval', 'daily', 'weekly'])
+
+/** 读取本地草稿；缺失、损坏或非表单结构时返回 undefined。 */
+export function readDraft(storage: SortPreferenceStorage | undefined, key: string): AutomationFormState | undefined {
+  if (storage === undefined) return undefined
+  try {
+    const raw = storage.getItem(key)
+    if (raw === null) return undefined
+    const value = JSON.parse(raw) as Partial<AutomationFormState> | null
+    if (typeof value !== 'object' || value === null) return undefined
+    if (typeof value.name !== 'string' || typeof value.prompt !== 'string') return undefined
+    if (typeof value.scheduleKind !== 'string' || !DRAFT_SCHEDULE_KINDS.has(value.scheduleKind as ScheduleKind)) return undefined
+    const base = defaultFormState()
+    return { ...base, ...value, weekdays: Array.isArray(value.weekdays) ? value.weekdays : base.weekdays }
+  } catch {
+    return undefined
+  }
+}
+
+export function writeDraft(storage: SortPreferenceStorage | undefined, key: string, form: AutomationFormState): void {
+  storage?.setItem(key, JSON.stringify(form))
+}
+
+export function clearDraft(storage: SortPreferenceStorage | undefined, key: string): void {
+  if (storage === undefined) return
+  const removable = storage as SortPreferenceStorage & { readonly removeItem?: (key: string) => void }
+  if (removable.removeItem !== undefined) removable.removeItem(key)
+  else storage.setItem(key, '')
+}
+
 export interface AutomationFormState {
   readonly name: string
   readonly prompt: string
@@ -50,11 +85,12 @@ export function localDateTimeValue(date = new Date()): string {
   return new Date(future.getTime() - offset).toISOString().slice(0, 16)
 }
 
+/** Create a fresh form state; the schedule defaults to a single future run. */
 export function defaultFormState(now = new Date()): AutomationFormState {
   return {
     name: '',
     prompt: '',
-    scheduleKind: 'daily',
+    scheduleKind: 'once',
     onceAt: localDateTimeValue(now),
     everyMinutes: '60',
     time: '09:00',
@@ -268,13 +304,117 @@ export function reasoningEffortChoices(
   return [{ id: currentEffort, name: currentEffort, unavailable: true }, ...choices]
 }
 
-const ATTENTION_STATUSES = new Set<AutomationRunStatus>(['failed', 'interrupted'])
+/** Problem statuses that count as needs-action until the user marks them reviewed. */
+const ATTENTION_STATUSES = new Set<AutomationRunStatus>(['failed', 'interrupted', 'skipped', 'cancelled'])
 
 export interface OverviewStats {
   readonly total: number
   readonly active: number
   readonly attention: number
   readonly nextRunAt?: string
+}
+
+export function startOfLocalDay(date: Date): Date {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate())
+}
+
+/** 周一作为一周的开始，与 dsh-personal-workbench 的周视图一致。 */
+export function startOfLocalWeek(date: Date): Date {
+  const start = startOfLocalDay(date)
+  const offset = (start.getDay() + 6) % 7
+  return addLocalDays(start, -offset)
+}
+
+export function addLocalDays(date: Date, days: number): Date {
+  const next = new Date(date)
+  next.setDate(next.getDate() + days)
+  return next
+}
+
+export function isSameLocalDay(left: Date, right: Date): boolean {
+  return left.getFullYear() === right.getFullYear()
+    && left.getMonth() === right.getMonth()
+    && left.getDate() === right.getDate()
+}
+
+/** 统计 nextRunAt 落在某个本地日期的自动化任务数量。 */
+export function countAutomationsOnDay(
+  automations: readonly AutomationViewModel[],
+  day: Date,
+): number {
+  let count = 0
+  for (const automation of automations) {
+    if (automation.nextRunAt !== undefined && isSameLocalDay(new Date(automation.nextRunAt), day)) {
+      count += 1
+    }
+  }
+  return count
+}
+
+/** 统计 nextRunAt 落在某个本地日期的任务数，按启用/暂停状态分开。 */
+export function countAutomationsByStatusOnDay(
+  automations: readonly AutomationViewModel[],
+  day: Date,
+): DayAutomationCounts {
+  let active = 0
+  let paused = 0
+  for (const automation of automations) {
+    if (automation.nextRunAt !== undefined && isSameLocalDay(new Date(automation.nextRunAt), day)) {
+      if (automation.status === 'active') active += 1
+      else paused += 1
+    }
+  }
+  return { active, paused }
+}
+
+/** 客户端近似计算计划的下次运行时间：主机快照缺失 nextRunAt 时（旧主机或
+ * 刚暂停的任务）用它兜底，保证暂停任务在排序和日历中的位置与启用任务一致。 */
+export function plannedNextRun(schedule: AutomationSchedule, createdAt: string, now: Date): string | undefined {
+  switch (schedule.kind) {
+    case 'once': {
+      const at = Date.parse(schedule.at)
+      return Number.isFinite(at) && at > now.getTime() ? schedule.at : undefined
+    }
+    case 'interval': {
+      const anchorMs = Date.parse(schedule.anchor ?? createdAt)
+      if (!Number.isFinite(anchorMs)) return undefined
+      const step = schedule.everyMinutes * 60_000
+      const k = Math.floor((now.getTime() - anchorMs) / step) + 1
+      return new Date(anchorMs + k * step).toISOString()
+    }
+    case 'daily': {
+      const [hour, minute] = schedule.time.split(':').map(Number)
+      const next = new Date(now)
+      next.setHours(hour ?? 0, minute ?? 0, 0, 0)
+      if (next.getTime() <= now.getTime()) next.setDate(next.getDate() + 1)
+      return next.toISOString()
+    }
+    case 'weekly': {
+      const [hour, minute] = schedule.time.split(':').map(Number)
+      const days = [...schedule.weekdays].sort((left, right) => left - right)
+      if (days.length === 0) return undefined
+      const today = now.getDay() === 0 ? 7 : now.getDay()
+      const target = days.find(day => day > today)
+      const delta = target === undefined ? 7 - today + (days[0] ?? 1) : target - today
+      const next = new Date(now)
+      next.setDate(next.getDate() + delta)
+      next.setHours(hour ?? 0, minute ?? 0, 0, 0)
+      return next.toISOString()
+    }
+  }
+}
+
+/** 生成周视图的 7 个本地日期（周一起始）。 */
+export function buildWeekCalendarDays(cursor: Date): readonly Date[] {
+  const start = startOfLocalWeek(cursor)
+  return Array.from({ length: 7 }, (_, index) => addLocalDays(start, index))
+}
+
+/** 生成月视图的 6x7 日期网格，覆盖该月所在的所有周。 */
+export function buildMonthCalendarGrid(cursor: Date): readonly Date[] {
+  const first = new Date(cursor.getFullYear(), cursor.getMonth(), 1)
+  const start = startOfLocalWeek(first)
+  return Array.from({ length: 42 }, (_, index) => addLocalDays(start, index))
 }
 
 export function deriveOverview(snapshot: AutomationSnapshot): OverviewStats {
@@ -326,4 +466,73 @@ export function formatSchedule(schedule: AutomationSchedule, t: Translate): stri
         time: schedule.time,
       })
   }
+}
+
+export type AutomationSortKey = 'created' | 'planned'
+export type AutomationSortDirection = 'asc' | 'desc'
+
+function sortStamp(value: string): number {
+  const parsed = Date.parse(value)
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
+/** 工作区任务列表排序：计划时间 = nextRunAt，无计划的任务固定排最后。 */
+export function sortAutomations(
+  items: readonly AutomationViewModel[],
+  key: AutomationSortKey,
+  direction: AutomationSortDirection,
+): AutomationViewModel[] {
+  const factor = direction === 'asc' ? 1 : -1
+  return items.slice().sort((left, right) => {
+    if (key === 'planned') {
+      const leftNext = left.nextRunAt
+      const rightNext = right.nextRunAt
+      if (leftNext === undefined || rightNext === undefined) {
+        if (leftNext === undefined && rightNext === undefined) {
+          return left.name.localeCompare(right.name) || left.id.localeCompare(right.id)
+        }
+        return leftNext === undefined ? 1 : -1
+      }
+      const primary = sortStamp(leftNext) - sortStamp(rightNext)
+      if (primary !== 0) return primary * factor
+      return left.name.localeCompare(right.name) || left.id.localeCompare(right.id)
+    }
+    const primary = sortStamp(left.createdAt) - sortStamp(right.createdAt)
+    if (primary !== 0) return primary * factor
+    return left.id.localeCompare(right.id)
+  })
+}
+
+export interface SortPreferenceStorage {
+  getItem(key: string): string | null
+  setItem(key: string, value: string): void
+}
+
+export const WORKSPACE_SORT_DEFAULT_KEY = 'dsh-automation.sort-default.workspace'
+
+/** 读取已保存的默认排序；缺失、损坏或无存储时返回 undefined，由调用方用自身默认值。 */
+export function readSortDefault(
+  storage: SortPreferenceStorage | undefined,
+  storageKey: string,
+): { readonly key: AutomationSortKey; readonly direction: AutomationSortDirection } | undefined {
+  if (storage === undefined) return undefined
+  try {
+    const raw = storage.getItem(storageKey)
+    if (raw === null) return undefined
+    const parsed = JSON.parse(raw) as { readonly key?: unknown; readonly direction?: unknown }
+    if (parsed.key !== 'created' && parsed.key !== 'planned') return undefined
+    if (parsed.direction !== 'asc' && parsed.direction !== 'desc') return undefined
+    return { key: parsed.key, direction: parsed.direction }
+  } catch {
+    return undefined
+  }
+}
+
+export function writeSortDefault(
+  storage: SortPreferenceStorage,
+  storageKey: string,
+  key: AutomationSortKey,
+  direction: AutomationSortDirection,
+): void {
+  storage.setItem(storageKey, JSON.stringify({ key, direction }))
 }

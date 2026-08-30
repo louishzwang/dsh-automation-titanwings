@@ -3,14 +3,27 @@ import test from 'node:test'
 import {
   AutomationFormError,
   buildCreateInput,
+  buildMonthCalendarGrid,
   buildUpdateInput,
+  buildWeekCalendarDays,
+  clearDraft,
+  countAutomationsByStatusOnDay,
+  countAutomationsOnDay,
   defaultFormState,
   deriveOverview,
   formStateFromAutomation,
   formatRelativeTime,
   formatSchedule,
+  isSameLocalDay,
   modelRouteChoices,
+  readDraft,
+  readSortDefault,
   reasoningEffortChoices,
+  sortAutomations,
+  startOfLocalWeek,
+  writeDraft,
+  writeSortDefault,
+  WORKSPACE_SORT_DEFAULT_KEY,
 } from '../src/client/helpers.js'
 import { en, zh } from '../src/client/locales.js'
 import { RecentRun } from '../src/client/AutomationView.js'
@@ -29,11 +42,18 @@ test('English and Chinese dictionaries own exactly the same keys', () => {
   assert.deepEqual(Object.keys(zh).sort(), Object.keys(en).sort())
   assert.equal(en.tab, 'Automations')
   assert.equal(zh.tab, '自动化')
+  assert.equal(en['section.runs'], 'Run history')
+  assert.equal(zh['section.runs'], '运行记录')
+  assert.equal(en['run.readd'], 'Add as new')
+  assert.equal(zh['run.readd'], '重新添加')
 })
 
 test('overview labels distinguish enabled definitions from running executions', () => {
+  assert.equal(zh['stats.attention'], '需要处理')
+  assert.equal(zh['stats.noAttention'], '一切正常')
+  assert.equal(zh['stats.currentStatus'], '当前状态：')
   assert.equal(en['stats.active'], 'Active')
-  assert.equal(zh['stats.active'], '已启用')
+  assert.equal(zh['stats.active'], '启用')
   assert.notEqual(zh['stats.active'], zh['status.running'])
 })
 
@@ -58,6 +78,15 @@ test('buildCreateInput trims text and normalizes a weekly schedule', () => {
     reasoningEffort: null,
     permission: 'workspace-write',
   })
+})
+
+test('the fresh create form defaults to a single future run', () => {
+  const now = new Date('2026-08-13T00:00:00Z')
+  const form = defaultFormState(now)
+  assert.equal(form.scheduleKind, 'once')
+  const once = new Date(form.onceAt)
+  assert.equal(Number.isNaN(once.getTime()), false)
+  assert.equal(once.getTime() > now.getTime(), true)
 })
 
 test('buildCreateInput rejects empty weekly days and unsafe intervals', () => {
@@ -236,7 +265,7 @@ test('Host-wide model catalog uses the official API envelope and preserves parti
   }), /host offline/)
 })
 
-test('deriveOverview counts active definitions and unread failures', () => {
+test('deriveOverview counts unread problem runs and ignores reviewed ones', () => {
   const snapshot: AutomationSnapshot = {
     scope: { cwd: '/workspace' },
     serverNow: '2026-08-13T00:00:00.000Z',
@@ -260,14 +289,80 @@ test('deriveOverview counts active definitions and unread failures', () => {
       { id: 'r1', automationId: 'a1', automationName: 'A', status: 'failed', trigger: 'schedule', scheduledFor: '2026-08-12T09:00:00.000Z', sessionArchived: false },
       { id: 'r2', automationId: 'a1', automationName: 'A', status: 'failed', trigger: 'schedule', scheduledFor: '2026-08-11T09:00:00.000Z', sessionArchived: false, unread: false },
       { id: 'r3', automationId: 'a2', automationName: 'B', status: 'succeeded', trigger: 'manual', scheduledFor: '2026-08-12T10:00:00.000Z', sessionArchived: false },
+      { id: 'r4', automationId: 'a1', automationName: 'A', status: 'skipped', trigger: 'schedule', scheduledFor: '2026-08-12T11:00:00.000Z', sessionArchived: false },
+      { id: 'r5', automationId: 'a1', automationName: 'A', status: 'cancelled', trigger: 'manual', scheduledFor: '2026-08-12T12:00:00.000Z', sessionArchived: false, unread: false },
     ],
   }
   assert.deepEqual(deriveOverview(snapshot), {
     total: 2,
     active: 1,
-    attention: 1,
+    attention: 2,
     nextRunAt: '2026-08-13T09:00:00.000Z',
   })
+})
+
+test('calendar helpers build Monday-first week and month grids', () => {
+  const cursor = new Date(2026, 7, 27)
+  const week = buildWeekCalendarDays(cursor)
+  assert.equal(week.length, 7)
+  assert.equal(week[0]?.getDay(), 1)
+  assert.equal(week[6]?.getDay(), 0)
+  assert.equal(isSameLocalDay(startOfLocalWeek(cursor), new Date(2026, 7, 24)), true)
+
+  const month = buildMonthCalendarGrid(cursor)
+  assert.equal(month.length, 42)
+  assert.equal(month[0]?.getDay(), 1)
+
+  const item: AutomationSnapshot['automations'][number] = {
+    id: 'calendar-a', revision: 1, name: 'Calendar A', prompt: 'P', status: 'active',
+    schedule: { kind: 'once', at: '2026-08-27T00:00:00.000Z', timeZone: 'UTC' },
+    scheduleSummary: 'Once', timeZone: 'UTC', provider: null, model: null,
+    reasoningEffort: null, permission: 'read-only',
+    nextRunAt: new Date(2026, 7, 27, 9).toISOString(),
+    createdAt: '2026-08-01T00:00:00.000Z', updatedAt: '2026-08-01T00:00:00.000Z',
+  }
+  assert.equal(countAutomationsOnDay([item], new Date(2026, 7, 27)), 1)
+  assert.equal(countAutomationsOnDay([item], new Date(2026, 7, 28)), 0)
+})
+
+test('calendar counts split active and paused tasks on the same day', () => {
+  const active: AutomationSnapshot['automations'][number] = {
+    id: 'day-active', revision: 1, name: 'A', prompt: 'P', status: 'active',
+    schedule: { kind: 'daily', time: '09:00', timeZone: 'UTC' }, scheduleSummary: 'Daily',
+    timeZone: 'UTC', provider: null, model: null, reasoningEffort: null, permission: 'read-only',
+    nextRunAt: new Date(2026, 7, 27, 9).toISOString(),
+    createdAt: '2026-08-01T00:00:00.000Z', updatedAt: '2026-08-01T00:00:00.000Z',
+  }
+  const paused: AutomationSnapshot['automations'][number] = {
+    ...active, id: 'day-paused', status: 'paused',
+    nextRunAt: new Date(2026, 7, 27, 10).toISOString(),
+  }
+  assert.deepEqual(countAutomationsByStatusOnDay([active, paused], new Date(2026, 7, 27)), { active: 1, paused: 1 })
+  assert.deepEqual(countAutomationsByStatusOnDay([active, paused], new Date(2026, 7, 28)), { active: 0, paused: 0 })
+})
+
+test('create-form drafts roundtrip through storage and reject corrupt values', () => {
+  const values = new Map<string, string>()
+  const storage = {
+    getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => { values.set(key, value) },
+    removeItem: (key: string) => { values.delete(key) },
+  }
+  const key = 'dsh-automation.draft.workspace.test'
+  assert.equal(readDraft(storage, key), undefined)
+
+  const form = { ...defaultFormState(new Date('2026-08-27T00:00:00Z')), name: 'Draft name', prompt: 'Draft prompt' }
+  writeDraft(storage, key, form)
+  assert.equal(readDraft(storage, key)?.name, 'Draft name')
+
+  values.set(key, '{broken')
+  assert.equal(readDraft(storage, key), undefined)
+
+  values.set(key, JSON.stringify({ name: 'No prompt', scheduleKind: 'daily' }))
+  assert.equal(readDraft(storage, key), undefined)
+
+  clearDraft(storage, key)
+  assert.equal(storage.getItem(key), null)
 })
 
 test('formatRelativeTime handles past and future windows', () => {
@@ -326,35 +421,165 @@ test('opening a run Session marks it read only after navigation succeeds', async
 })
 
 test('an archived run labels its Session without rendering a broken open button', () => {
-  type RenderedChild = {
+  type RenderedNode = {
+    readonly type?: unknown
+    readonly props?: { readonly className?: string; readonly children?: unknown; readonly 'aria-label'?: string }
+  }
+  const flatten = (node: unknown): RenderedNode[] => {
+    if (node === null || node === undefined || typeof node === 'string' || typeof node === 'number' || typeof node === 'boolean') return []
+    if (Array.isArray(node)) return node.flatMap(flatten)
+    const element = node as RenderedNode
+    if (typeof element !== 'object') return []
+    return [element, ...flatten(element.props?.children)]
+  }
+  const render = (sessionArchived: boolean): RenderedNode[] => flatten(RecentRun({
+    run: {
+      id: 'run-archived', automationId: 'automation-1', automationName: 'Archived result',
+      status: 'succeeded' as const, trigger: 'manual' as const,
+      scheduledFor: '2026-08-17T00:00:00.000Z', sessionId: 'dsh-automation-session-archived',
+      sessionArchived,
+    },
+    now: new Date('2026-08-17T00:00:01.000Z'), t, busy: false,
+    automationMissing: false, confirmingDelete: false,
+    onOpen: () => { throw new Error('archived Session must not be opened') },
+    onMarkRead: () => {}, onReadd: () => {},
+    onConfirmDelete: () => {}, onDelete: () => {},
+  }) as unknown)
+
+  const archived = render(true)
+  const archivedLabel = archived.find(child => child.props?.className?.includes('--archived'))
+  assert.equal(archivedLabel?.type, 'span')
+  assert.match(String(archivedLabel?.props?.children), /Session archived/)
+  assert.equal(archived.some(child => child.type === 'button'
+    && child.props?.className === 'dsh-automation-session-id'), false)
+
+  const visible = render(false)
+  assert.equal(visible.some(child => child.type === 'button'
+    && child.props?.className === 'dsh-automation-session-id'), true)
+})
+
+test('run cards expose re-add and record-delete actions with a confirm step', () => {
+  type RenderedNode = {
+    readonly type?: unknown
+    readonly props?: { readonly className?: string; readonly children?: unknown; readonly 'aria-label'?: string; readonly disabled?: boolean }
+  }
+  const flatten = (node: unknown): RenderedNode[] => {
+    if (node === null || node === undefined || typeof node === 'string' || typeof node === 'number' || typeof node === 'boolean') return []
+    if (Array.isArray(node)) return node.flatMap(flatten)
+    const element = node as RenderedNode
+    if (typeof element !== 'object') return []
+    return [element, ...flatten(element.props?.children)]
+  }
+  const render = (options: { confirmingDelete?: boolean; automationMissing?: boolean } = {}): RenderedNode[] => flatten(RecentRun({
+    run: {
+      id: 'run-actions', automationId: 'automation-1', automationName: 'Action result',
+      status: 'succeeded' as const, trigger: 'schedule' as const,
+      scheduledFor: '2026-08-17T00:00:00.000Z', sessionId: 'dsh-automation-session-actions',
+      sessionArchived: false,
+    },
+    now: new Date('2026-08-17T00:00:01.000Z'), t, busy: false,
+    automationMissing: options.automationMissing ?? false,
+    confirmingDelete: options.confirmingDelete ?? false,
+    onOpen: () => {}, onMarkRead: () => {}, onReadd: () => {},
+    onConfirmDelete: () => {}, onDelete: () => {},
+  }) as unknown)
+
+  const actions = render()
+  const buttonText = (className: string): string => actions
+    .filter(node => node.type === 'button' && String(node.props?.className).includes(className))
+    .map(node => String(node.props?.children))
+    .join(' | ')
+  assert.match(buttonText('dsh-automation-button'), /Add as new/)
+  assert.equal(actions.some(node => node.type === 'button' && node.props?.['aria-label'] === 'Delete record'), true)
+  assert.equal(actions.some(node => node.type === 'button' && String(node.props?.children).includes('Archive')), false)
+
+  const missing = render({ automationMissing: true })
+  assert.equal(missing.some(node => node.type === 'button'
+    && String(node.props?.children).includes('Add as new')), true)
+  assert.match(missing.filter(node => node.type === 'h3').map(node => String(node.props?.children)).join(''), /Automation deleted/)
+
+  const confirming = render({ confirmingDelete: true })
+  assert.match(confirming.filter(node => node.type === 'button').map(node => String(node.props?.children)).join(' | '), /Confirm delete/)
+})
+
+test('skipped and cancelled runs offer mark-reviewed exactly while unread', () => {
+  type RenderedNode = {
     readonly type?: unknown
     readonly props?: { readonly className?: string; readonly children?: unknown }
   }
-  type RenderedRun = { readonly props: { readonly children: readonly RenderedChild[] } }
-  const common = {
-    id: 'run-archived', automationId: 'automation-1', automationName: 'Archived result',
-    status: 'succeeded' as const, trigger: 'manual' as const,
-    scheduledFor: '2026-08-17T00:00:00.000Z', sessionId: 'dsh-automation-session-archived',
+  const flatten = (node: unknown): RenderedNode[] => {
+    if (node === null || node === undefined || typeof node === 'string' || typeof node === 'number' || typeof node === 'boolean') return []
+    if (Array.isArray(node)) return node.flatMap(flatten)
+    const element = node as RenderedNode
+    if (typeof element !== 'object') return []
+    return [element, ...flatten(element.props?.children)]
   }
-  const archived = RecentRun({
-    run: { ...common, sessionArchived: true },
+  const render = (status: 'skipped' | 'cancelled', unread: boolean): RenderedNode[] => flatten(RecentRun({
+    run: {
+      id: 'run-problem', automationId: 'automation-1', automationName: 'Problem run',
+      status, trigger: 'schedule' as const,
+      scheduledFor: '2026-08-17T00:00:00.000Z', sessionArchived: false, unread,
+    },
     now: new Date('2026-08-17T00:00:01.000Z'), t, busy: false,
-    onOpen: () => { throw new Error('archived Session must not be opened') },
-    onMarkRead: () => {},
-  }) as unknown as RenderedRun
-  const archivedAction = archived.props.children.find(child => child?.props?.className?.includes('--archived'))
-  assert.equal(archivedAction?.type, 'span')
-  assert.match(String(archivedAction?.props?.children), /Session archived/)
-  assert.equal(archived.props.children.some(child => child?.type === 'button'
-    && child?.props?.className === 'dsh-automation-session-id'), false)
+    automationMissing: false, confirmingDelete: false,
+    onOpen: () => {}, onMarkRead: () => {}, onReadd: () => {},
+    onConfirmDelete: () => {}, onDelete: () => {},
+  }) as unknown)
+  const offersMarkReviewed = (status: 'skipped' | 'cancelled', unread: boolean): boolean => render(status, unread)
+    .some(node => node.type === 'button' && String(node.props?.children).includes('Mark reviewed'))
+  for (const status of ['skipped', 'cancelled'] as const) {
+    assert.equal(offersMarkReviewed(status, true), true)
+    assert.equal(offersMarkReviewed(status, false), false)
+  }
+})
 
-  const visible = RecentRun({
-    run: { ...common, sessionArchived: false },
-    now: new Date('2026-08-17T00:00:01.000Z'), t, busy: false,
-    onOpen: () => {}, onMarkRead: () => {},
-  }) as unknown as RenderedRun
-  assert.equal(visible.props.children.some(child => child?.type === 'button'
-    && child?.props?.className === 'dsh-automation-session-id'), true)
+test('refresh reports an unavailable phase while the source session has no live Agent', async () => {
+  let fail = true
+  const rpc = {
+    call: async (_channel: string, endpoint: string) => {
+      if (endpoint === 'snapshot' && fail) {
+        throw new Error('The automation UI/tool requires a live source session.')
+      }
+      return {
+        ok: true,
+        value: { scope: { cwd: '/workspace' }, automations: [], runs: [], serverNow: new Date().toISOString() },
+      }
+    },
+  }
+  const runtime = createAutomationRuntime(rpc, 'session-fresh')
+
+  await assert.rejects(() => runtime.refresh(), /requires a live source session/)
+  assert.equal(runtime.source.getSnapshot().phase, 'unavailable')
+
+  fail = false
+  await runtime.refresh()
+  assert.equal(runtime.source.getSnapshot().phase, 'ready')
+})
+
+test('archive and delete run RPCs carry the run id and refresh the snapshot', async () => {
+  const calls: Array<{ endpoint: string; payload: unknown }> = []
+  const rpc = {
+    call: async (_channel: string, endpoint: string, payload: unknown) => {
+      calls.push({ endpoint, payload })
+      if (endpoint === 'snapshot') {
+        return {
+          ok: true,
+          value: { scope: { cwd: '/workspace' }, automations: [], runs: [], serverNow: new Date().toISOString() },
+        }
+      }
+      return { ok: true, value: {} }
+    },
+  }
+  const runtime = createAutomationRuntime(rpc, 'session-source')
+
+  await runtime.archiveRun('run-archive')
+  assert.deepEqual(calls.map(call => call.endpoint), ['archive-run', 'snapshot'])
+  assert.deepEqual(calls[0]?.payload, { sessionId: 'session-source', runId: 'run-archive' })
+
+  calls.length = 0
+  await runtime.deleteRun('run-delete')
+  assert.deepEqual(calls.map(call => call.endpoint), ['delete-run', 'snapshot'])
+  assert.deepEqual(calls[0]?.payload, { sessionId: 'session-source', runId: 'run-delete' })
 })
 
 test('editing sends a revision-guarded update and refreshes the snapshot', async () => {
@@ -389,4 +614,53 @@ test('editing sends a revision-guarded update and refreshes the snapshot', async
     expectedRevision: 7,
     input,
   })
+})
+
+const sortItem = (id: string, name: string, createdAt: string, nextRunAt?: string): AutomationSnapshot['automations'][number] => ({
+  id,
+  revision: 1,
+  name,
+  prompt: 'Task.',
+  status: 'active',
+  schedule: { kind: 'daily', time: '09:00', timeZone: 'UTC' },
+  scheduleSummary: 'Daily · 09:00',
+  timeZone: 'UTC',
+  provider: null,
+  model: null,
+  reasoningEffort: null,
+  permission: 'read-only',
+  createdAt,
+  updatedAt: createdAt,
+  ...(nextRunAt === undefined ? {} : { nextRunAt }),
+})
+
+test('workspace automation sort supports created and planned time with a stable fallback', () => {
+  const items = [
+    sortItem('a', 'Alpha', '2026-08-10T00:00:00.000Z', '2026-09-01T00:00:00.000Z'),
+    sortItem('b', 'Beta', '2026-08-11T00:00:00.000Z', '2026-08-15T00:00:00.000Z'),
+    sortItem('c', 'Gamma', '2026-08-12T00:00:00.000Z'),
+  ]
+
+  assert.deepEqual(sortAutomations(items, 'created', 'desc').map(item => item.id), ['c', 'b', 'a'])
+  assert.deepEqual(sortAutomations(items, 'created', 'asc').map(item => item.id), ['a', 'b', 'c'])
+  // Planned ascending keeps the unpinned task last, regardless of direction.
+  assert.deepEqual(sortAutomations(items, 'planned', 'asc').map(item => item.id), ['b', 'a', 'c'])
+  assert.deepEqual(sortAutomations(items, 'planned', 'desc').map(item => item.id), ['a', 'b', 'c'])
+})
+
+test('sort default preferences survive storage roundtrips and reject corrupt values', () => {
+  const values = new Map<string, string>()
+  const storage = {
+    getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => { values.set(key, value) },
+  }
+
+  assert.equal(readSortDefault(storage, WORKSPACE_SORT_DEFAULT_KEY), undefined)
+  writeSortDefault(storage, WORKSPACE_SORT_DEFAULT_KEY, 'planned', 'asc')
+  assert.deepEqual(readSortDefault(storage, WORKSPACE_SORT_DEFAULT_KEY), { key: 'planned', direction: 'asc' })
+
+  values.set(WORKSPACE_SORT_DEFAULT_KEY, '{broken')
+  assert.equal(readSortDefault(storage, WORKSPACE_SORT_DEFAULT_KEY), undefined)
+  values.set(WORKSPACE_SORT_DEFAULT_KEY, JSON.stringify({ key: 'title', direction: 'asc' }))
+  assert.equal(readSortDefault(storage, WORKSPACE_SORT_DEFAULT_KEY), undefined)
 })

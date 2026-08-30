@@ -1,7 +1,7 @@
 import type { ClientLlmApi, ClientRpc } from './contracts.js';
 import type { AutomationSnapshot, CreateAutomationInput, MutateRequest, UpdateAutomationInput, ModelCatalog } from './protocol.js';
 export interface AutomationClientState {
-    readonly phase: 'idle' | 'loading' | 'ready' | 'error';
+    readonly phase: 'idle' | 'loading' | 'ready' | 'error' | 'unavailable';
     readonly snapshot?: AutomationSnapshot;
     readonly error?: string;
     readonly refreshedAt?: number;
@@ -18,6 +18,8 @@ export interface AutomationRuntime {
     mutateAutomation(automationId: string, mutation: MutateRequest['mutation']): Promise<void>;
     runNow(automationId: string): Promise<void>;
     markRunRead(runId: string): Promise<void>;
+    archiveRun(runId: string): Promise<void>;
+    deleteRun(runId: string): Promise<void>;
     openRunSession(runId: string, open: () => Promise<void>): Promise<void>;
 }
 /** Read the Host-wide catalog without discarding sound providers when peers fail. */

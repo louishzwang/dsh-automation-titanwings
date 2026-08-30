@@ -40,6 +40,8 @@ test('snapshot marks archived run Sessions so the client never offers a broken o
         startedAt: '2026-08-17T00:00:01.000Z', finishedAt: '2026-08-17T00:00:02.000Z',
         sessionId: 'dsh-automation-session-archived', sessionArchived: true,
         summary: 'No regression found.', unread: false,
+        promptSnapshot: 'Inspect one condition.',
+        provider: null, model: null, reasoningEffort: null, permission: 'read-only',
       }],
       serverNow: '2026-08-17T00:00:00.000Z',
     },
@@ -139,6 +141,53 @@ test('mark-read RPC is loopback-only and propagates scoped service calls and can
     error: { code: 'cancelled', message: 'The automation request was cancelled.', details: {} },
   })
   assert.equal(calls.length, 1)
+  await remove()
+  assert.equal(removed, true)
+})
+
+test('archive-run and delete-run RPCs propagate scoped service calls', async () => {
+  let handler: ((endpoint: string, payload: unknown, signal: AbortSignal) => Promise<unknown>) | undefined
+  let removed = false
+  const ctx = {
+    connection: {
+      rpc: {
+        handle: (
+          channel: string,
+          value: (endpoint: string, payload: unknown, signal: AbortSignal) => Promise<unknown>,
+          options: unknown,
+        ) => {
+          assert.equal(channel, '/dsh-automation')
+          assert.deepEqual(options, { authority: 'loopback' })
+          handler = value
+          return async () => { removed = true }
+        },
+      },
+    },
+  }
+  const calls: Array<{ method: string; scope: unknown; runId: string }> = []
+  const service = {
+    archiveRun: async (scope: unknown, runId: string) => {
+      calls.push({ method: 'archiveRun', scope, runId })
+      return { id: runId, unread: false }
+    },
+    deleteRun: async (scope: unknown, runId: string) => {
+      calls.push({ method: 'deleteRun', scope, runId })
+      return { id: runId, deleted: true }
+    },
+  }
+  const remove = registerAutomationRpc(ctx, service as never)
+  const signal = new AbortController().signal
+
+  const archived = await handler?.('archive-run', { sessionId: 'session-source', runId: 'run-archive' }, signal)
+  assert.deepEqual(archived, { ok: true, value: { runId: 'run-archive', sessionArchived: true } })
+
+  const deleted = await handler?.('delete-run', { sessionId: 'session-source', runId: 'run-delete' }, signal)
+  assert.deepEqual(deleted, { ok: true, value: { id: 'run-delete', deleted: true } })
+
+  assert.deepEqual(calls, [
+    { method: 'archiveRun', scope: { sessionId: 'session-source', creatorKind: 'web' }, runId: 'run-archive' },
+    { method: 'deleteRun', scope: { sessionId: 'session-source', creatorKind: 'web' }, runId: 'run-delete' },
+  ])
   await remove()
   assert.equal(removed, true)
 })

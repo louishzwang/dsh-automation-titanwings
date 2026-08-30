@@ -1,8 +1,10 @@
 import type { ClientLlmApi, ClientRpc } from './contracts.js'
 import type {
+  ArchiveRunRequest,
   AutomationSnapshot,
   CreateAutomationInput,
   CreateRequest,
+  DeleteRunRequest,
   MarkReadRequest,
   MutateRequest,
   RunNowRequest,
@@ -16,7 +18,7 @@ import { unwrapRpcResult } from './protocol.js'
 const CHANNEL = '/dsh-automation'
 
 export interface AutomationClientState {
-  readonly phase: 'idle' | 'loading' | 'ready' | 'error'
+  readonly phase: 'idle' | 'loading' | 'ready' | 'error' | 'unavailable'
   readonly snapshot?: AutomationSnapshot
   readonly error?: string
   readonly refreshedAt?: number
@@ -35,6 +37,8 @@ export interface AutomationRuntime {
   mutateAutomation(automationId: string, mutation: MutateRequest['mutation']): Promise<void>
   runNow(automationId: string): Promise<void>
   markRunRead(runId: string): Promise<void>
+  archiveRun(runId: string): Promise<void>
+  deleteRun(runId: string): Promise<void>
   openRunSession(runId: string, open: () => Promise<void>): Promise<void>
 }
 
@@ -79,10 +83,15 @@ export function createAutomationRuntime(rpc: ClientRpc, sessionId: string): Auto
         publish({ phase: 'ready', snapshot, refreshedAt: Date.now() })
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
+        // The source conversation has no live Agent yet (switching to a
+        // fresh/resuming conversation): show a friendly prompt instead of a
+        // hard error and let the poll recover once the Agent exists.
+        const unavailable = /requires a live source session/.test(message)
+        const phase = unavailable ? 'unavailable' : 'error'
         publish(previous === undefined
-          ? { phase: 'error', error: message }
+          ? { phase, error: message }
           : {
-              phase: 'error',
+              phase,
               snapshot: previous,
               error: message,
               ...(state.refreshedAt === undefined ? {} : { refreshedAt: state.refreshedAt }),
@@ -107,6 +116,14 @@ export function createAutomationRuntime(rpc: ClientRpc, sessionId: string): Auto
     const payload: MarkReadRequest = { sessionId, runId }
     await mutateThenRefresh('mark-read', payload)
   }
+  const archiveRun = async (runId: string): Promise<void> => {
+    const payload: ArchiveRunRequest = { sessionId, runId }
+    await mutateThenRefresh('archive-run', payload)
+  }
+  const deleteRun = async (runId: string): Promise<void> => {
+    const payload: DeleteRunRequest = { sessionId, runId }
+    await mutateThenRefresh('delete-run', payload)
+  }
 
   return {
     source,
@@ -128,6 +145,8 @@ export function createAutomationRuntime(rpc: ClientRpc, sessionId: string): Auto
       await mutateThenRefresh('run-now', payload)
     },
     markRunRead,
+    archiveRun,
+    deleteRun,
     async openRunSession(runId, open) {
       // A failed navigation must leave the run unread so it still asks for
       // attention. Mark it only after the destination Session is available.

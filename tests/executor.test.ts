@@ -38,7 +38,14 @@ function executorFixture(options: { readonly hangUntilCancelled?: boolean } = {}
   let cancelled = false
   let settleIdle = () => {}
   const hangingIdle = new Promise<void>(resolve => { settleIdle = resolve })
-  const session = { seq: 0, events: [] as Array<{ seq: number; type: string; data: Record<string, unknown> }> }
+  const session = {
+    seq: 0,
+    events: [] as Array<{ seq: number; type: string; data: Record<string, unknown> }>,
+    append: (type: string, data: Record<string, unknown>) => {
+      session.events.push({ seq: session.seq, type, data })
+      session.seq += 1
+    },
+  }
   const agent = {
     session,
     whenIdle: () => {
@@ -49,11 +56,10 @@ function executorFixture(options: { readonly hangUntilCancelled?: boolean } = {}
       followedUp = true
       if (options.hangUntilCancelled) return
       session.events.push(
-        { seq: 0, type: 'turn/start', data: {} },
-        { seq: 1, type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'done' }] } } },
-        { seq: 2, type: 'turn/end', data: { reason: { kind: 'completed' } } },
+        { seq: session.seq++, type: 'turn/start', data: {} },
+        { seq: session.seq++, type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'done' }] } } },
+        { seq: session.seq++, type: 'turn/end', data: { reason: { kind: 'completed' } } },
       )
-      session.seq = 3
     },
     cancel: () => {
       cancelled = true
@@ -78,7 +84,7 @@ function executorFixture(options: { readonly hangUntilCancelled?: boolean } = {}
     },
     sessions: { flush: async () => true },
   }
-  return { ctx, definition, run, wasCancelled: () => cancelled }
+  return { ctx, definition, run, session, wasCancelled: () => cancelled }
 }
 
 test('unattended tool guard blocks interaction, delegation, and background process escape', () => {
@@ -137,6 +143,25 @@ test('executor removes its abort listener after a normally completed run', async
   assert.equal(signal.added, 1)
   assert.equal(signal.removed, 1)
   assert.equal(signal.listeners.size, 0)
+})
+
+test('executor stamps the automation name as the run Session title', async () => {
+  const fixture = executorFixture()
+  const completion = await executeAutomationRun(
+    fixture.ctx as never,
+    fixture.definition,
+    fixture.run,
+    { runTimeoutMs: 1_000, sessionId: 'dsh-automation-session-title' },
+  )
+
+  assert.equal(completion.status, 'succeeded')
+  const titleEvents = fixture.session.events.filter(event => event.type === 'session/title')
+  assert.equal(titleEvents.length, 1)
+  assert.deepEqual(titleEvents[0]?.data, {
+    title: 'Executor test',
+    messageSeqs: [],
+    source: { kind: 'user' },
+  })
 })
 
 test('executor timeout cancels a stuck Agent, settles, and removes its abort listener', async () => {
