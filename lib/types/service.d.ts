@@ -105,7 +105,9 @@ export declare class AutomationService {
         readonly id: string;
         readonly deleted: boolean;
     }>;
-    runNow(scope: AutomationScope, id: string, signal?: AbortSignal): Promise<AutomationRun>;
+    runNow(scope: AutomationScope, id: string, options?: {
+        readonly replaceNext?: boolean;
+    }, signal?: AbortSignal): Promise<AutomationRun>;
     markRead(scope: AutomationScope, runId: string, signal?: AbortSignal): Promise<AutomationRun>;
     /** Archive the Session of one run so it leaves every conversation-list grouping surface. */
     archiveRun(scope: AutomationScope, runId: string, signal?: AbortSignal): Promise<AutomationRun>;
@@ -130,6 +132,8 @@ export declare class AutomationService {
      * definition does not cancel its unhandled past occurrences.
      */
     private claimMissedRuns;
+    /** A succeeded "run ahead" manual run counts as having handled its target occurrence. */
+    private isReplacedByManualRun;
     private startQueuedRuns;
     private startRun;
     private executeRun;

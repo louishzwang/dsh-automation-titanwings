@@ -1,5 +1,5 @@
 import type { ClientRemote, ClientRpc } from './contracts.js';
-import type { AutomationSnapshot, CreateAutomationInput, MutateRequest, SettingsUpdateInput, UpdateAutomationInput, ModelCatalog } from './protocol.js';
+import type { AutomationSnapshot, CreateAutomationInput, MutateRequest, RunNowMode, SettingsUpdateInput, UpdateAutomationInput, ModelCatalog } from './protocol.js';
 export interface AutomationClientState {
     readonly phase: 'idle' | 'loading' | 'ready' | 'error' | 'unavailable';
     readonly snapshot?: AutomationSnapshot;
@@ -16,7 +16,7 @@ export interface AutomationRuntime {
     createAutomation(input: CreateAutomationInput): Promise<void>;
     updateAutomation(automationId: string, expectedRevision: number, input: UpdateAutomationInput): Promise<void>;
     mutateAutomation(automationId: string, mutation: MutateRequest['mutation']): Promise<void>;
-    runNow(automationId: string): Promise<void>;
+    runNow(automationId: string, mode: RunNowMode): Promise<void>;
     markRunRead(runId: string): Promise<void>;
     archiveRun(runId: string): Promise<void>;
     deleteRun(runId: string): Promise<void>;

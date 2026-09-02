@@ -368,3 +368,53 @@ test('settings-update validates ranges and forwards scoped policy writes', async
   assert.equal(rejected.error.code, 'bad-request')
   assert.equal(calls.length, 1)
 })
+
+test('run-now forwards the manual run mode and rejects unknown modes', async () => {
+  let handler: ((endpoint: string, payload: unknown, signal: AbortSignal) => Promise<unknown>) | undefined
+  const ctx = {
+    connection: { rpc: { handle: (_channel: string, value: typeof handler) => { handler = value; return async () => {} } } },
+  }
+  const calls: Array<{ scope: unknown; id: string; options: unknown }> = []
+  const service = {
+    runNow: async (scope: unknown, id: string, options: unknown) => {
+      calls.push({ scope, id, options })
+      return { id: 'run-1' }
+    },
+  }
+  registerAutomationRpc(ctx as never, service as never)
+  const signal = new AbortController().signal
+
+  const ahead = await handler?.('run-now', {
+    sessionId: 'session-source',
+    automationId: 'automation-ahead',
+    mode: 'ahead',
+  }, signal)
+  assert.deepEqual(ahead, { ok: true, value: { runId: 'run-1' } })
+
+  const plain = await handler?.('run-now', {
+    sessionId: 'session-source',
+    automationId: 'automation-plain',
+  }, signal)
+  assert.deepEqual(plain, { ok: true, value: { runId: 'run-1' } })
+  assert.deepEqual(calls, [
+    {
+      scope: { sessionId: 'session-source', creatorKind: 'web' },
+      id: 'automation-ahead',
+      options: { replaceNext: true },
+    },
+    {
+      scope: { sessionId: 'session-source', creatorKind: 'web' },
+      id: 'automation-plain',
+      options: { replaceNext: false },
+    },
+  ])
+
+  const rejected = await handler?.('run-now', {
+    sessionId: 'session-source',
+    automationId: 'automation-bad',
+    mode: 'sideways',
+  }, signal) as { readonly ok: false; readonly error: { readonly code: string } }
+  assert.equal(rejected.ok, false)
+  assert.equal(rejected.error.code, 'bad-request')
+  assert.equal(calls.length, 2)
+})

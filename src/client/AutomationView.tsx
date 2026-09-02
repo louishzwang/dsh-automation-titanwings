@@ -59,6 +59,7 @@ import type {
   AutomationViewModel,
   CreateAutomationInput,
   ModelCatalog,
+  RunNowMode,
   SettingsUpdateInput,
   UpdateAutomationInput,
 } from './protocol.js'
@@ -258,6 +259,7 @@ export function clampAutomationFloatBox(
 export function initialAutomationFloatBox(
   anchor?: AutomationFloatAnchor,
   viewport = currentAutomationFloatViewport(),
+  initialHeight = FLOAT_DEFAULT_HEIGHT,
 ): AutomationFloatBox {
   const originLeft = viewport.offsetLeft ?? 0
   const originTop = viewport.offsetTop ?? 0
@@ -269,9 +271,9 @@ export function initialAutomationFloatBox(
   }
   let box = clampAutomationFloatBox({
     x: Math.round((viewport.width - FLOAT_DEFAULT_WIDTH) / 2),
-    y: Math.round((viewport.height - FLOAT_DEFAULT_HEIGHT) / 2),
+    y: Math.round((viewport.height - initialHeight) / 2),
     w: FLOAT_DEFAULT_WIDTH,
-    h: FLOAT_DEFAULT_HEIGHT,
+    h: initialHeight,
   }, originViewport)
   if (anchor === undefined) return box
 
@@ -285,14 +287,15 @@ export function initialAutomationFloatBox(
   return box
 }
 
-function AutomationFloat({ label, busy, onClose, anchor, children }: {
+function AutomationFloat({ label, busy, onClose, anchor, height, children }: {
   readonly label: string
   readonly busy: boolean
   readonly onClose: () => void
   readonly anchor: DOMRect | undefined
+  readonly height?: number
   readonly children: ReactNode
 }): JSX.Element {
-  const [box, setBox] = useState(() => initialAutomationFloatBox(anchor))
+  const [box, setBox] = useState(() => initialAutomationFloatBox(anchor, undefined, height))
   const dragRef = useRef<{
     readonly mode: 'move' | 'resize'
     readonly startX: number
@@ -908,6 +911,78 @@ function AutomationSettingsPanel(props: AutomationSettingsPanelProps): JSX.Eleme
   )
 }
 
+interface AutomationRunDialogProps {
+  readonly t: Translate
+  readonly automation: AutomationViewModel
+  readonly busy: boolean
+  readonly onCancel: () => void
+  readonly onRun: (automationId: string, mode: RunNowMode) => Promise<void>
+}
+
+/** Ask how a manual run should treat the pending schedule: replace it or leave it. */
+function AutomationRunDialog(props: AutomationRunDialogProps): JSX.Element {
+  const { t, automation, busy, onCancel, onRun } = props
+  const canAhead = automation.nextRunAt !== undefined
+  const [mode, setMode] = useState<RunNowMode>('ahead')
+  const chosen = canAhead ? mode : 'plain'
+  const submit = (event: FormEvent): void => {
+    event.preventDefault()
+    void onRun(automation.id, chosen)
+  }
+  return (
+    <form className="dsh-automation-create dsh-automation-run-dialog" onSubmit={submit}>
+      <div className="dsh-automation-create-heading">
+        <h2>{t('run.title')}</h2>
+        <p>{automation.name}</p>
+        <button className="dsh-automation-button dsh-automation-button--ghost" type="button" onClick={onCancel} disabled={busy}>
+          {t('form.cancel')}
+        </button>
+      </div>
+
+      <div className="dsh-automation-form-grid">
+        <div className="dsh-automation-permission-grid dsh-automation-field--wide">
+          <label className={chosen === 'ahead' ? 'is-selected' : ''}>
+            <input
+              type="radio"
+              name="run-mode"
+              value="ahead"
+              checked={chosen === 'ahead'}
+              disabled={!canAhead}
+              onChange={() => setMode('ahead')}
+            />
+            <span>
+              <strong>{t('run.ahead')}</strong>
+              <small>{t('run.aheadHint')}</small>
+            </span>
+          </label>
+          <label className={chosen === 'plain' ? 'is-selected' : ''}>
+            <input
+              type="radio"
+              name="run-mode"
+              value="plain"
+              checked={chosen === 'plain'}
+              onChange={() => setMode('plain')}
+            />
+            <span>
+              <strong>{t('run.plain')}</strong>
+              <small>{t('run.plainHint')}</small>
+            </span>
+          </label>
+        </div>
+        {!canAhead && <p className="dsh-automation-settings-lead dsh-automation-field--wide">{t('run.noPlan')}</p>}
+      </div>
+
+      <div className="dsh-automation-form-footer">
+        <span />
+        <button className="dsh-automation-button dsh-automation-button--primary" type="submit" disabled={busy}>
+          <PlayIcon />
+          {busy ? t('settings.saving') : t('run.confirm')}
+        </button>
+      </div>
+    </form>
+  )
+}
+
 interface AutomationCardProps {
   readonly automation: AutomationViewModel
   readonly now: Date
@@ -917,7 +992,7 @@ interface AutomationCardProps {
   readonly onConfirmDelete: (id?: string) => void
   readonly onEdit: (automation: AutomationViewModel, anchor?: DOMRect) => void
   readonly onMutate: (id: string, mutation: 'pause' | 'resume' | 'delete') => void
-  readonly onRun: (id: string) => void
+  readonly onRun: (automation: AutomationViewModel, anchor?: DOMRect) => void
 }
 
 function AutomationCard(props: AutomationCardProps): JSX.Element {
@@ -988,7 +1063,7 @@ function AutomationCard(props: AutomationCardProps): JSX.Element {
           <button className="dsh-automation-button dsh-automation-button--ghost" type="button" onClick={(event) => onEdit(automation, event.currentTarget.getBoundingClientRect())} disabled={isBusy}>
             <PencilIcon />{t('card.edit')}
           </button>
-          <button className="dsh-automation-button dsh-automation-button--ghost" type="button" onClick={() => onRun(automation.id)} disabled={isBusy}>
+          <button className="dsh-automation-button dsh-automation-button--ghost" type="button" onClick={(event) => onRun(automation, event.currentTarget.getBoundingClientRect())} disabled={isBusy}>
             <PlayIcon />{t('card.runNow')}
           </button>
           <button className="dsh-automation-button dsh-automation-button--ghost" type="button" onClick={() => onMutate(automation.id, automation.status === 'active' ? 'pause' : 'resume')} disabled={isBusy}>
@@ -1091,6 +1166,7 @@ export function AutomationView({
   const state = useAutomationState(value => value)
   const [showCreate, setShowCreate] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [runNowTarget, setRunNowTarget] = useState<AutomationViewModel>()
   const [editingAutomation, setEditingAutomation] = useState<AutomationViewModel>()
   const [busyKey, setBusyKey] = useState<string>()
   const [actionError, setActionError] = useState<string>()
@@ -1108,6 +1184,7 @@ export function AutomationView({
   const draftRef = useRef<{ form: AutomationFormState | undefined }>({ form: undefined })
   const createAnchorRef = useRef<DOMRect | undefined>(undefined)
   const editAnchorRef = useRef<DOMRect | undefined>(undefined)
+  const runNowAnchorRef = useRef<DOMRect | undefined>(undefined)
   const settingsAnchorRef = useRef<DOMRect | undefined>(undefined)
   const runsSignatureRef = useRef('')
   const phaseRef = useRef(state.phase)
@@ -1281,8 +1358,17 @@ export function AutomationView({
       }
     })
   }
-  const onRun = (id: string): void => {
-    void perform(actionKey('run', id), () => runNow(id))
+  const onRun = (automation: AutomationViewModel, anchor?: DOMRect): void => {
+    setRunNowTarget(automation)
+    runNowAnchorRef.current = anchor
+  }
+  const onRunNow = async (automationId: string, mode: RunNowMode): Promise<void> => {
+    let started = false
+    await perform(actionKey('run', automationId), async () => {
+      await runNow(automationId, mode)
+      started = true
+    })
+    if (started) setRunNowTarget(undefined)
   }
   const onOpenSession = (runId: string, sessionId: string): void => {
     void perform(actionKey('run', runId), () => openSession(runId, sessionId))
@@ -1487,6 +1573,24 @@ export function AutomationView({
               onSubmit={onSaveSettings}
             />
           )}
+        </AutomationFloat>
+      )}
+
+      {runNowTarget !== undefined && (
+        <AutomationFloat
+          label={t('run.title')}
+          busy={busyKey === actionKey('run', runNowTarget.id)}
+          onClose={() => setRunNowTarget(undefined)}
+          anchor={runNowAnchorRef.current}
+          height={FLOAT_MIN_HEIGHT}
+        >
+          <AutomationRunDialog
+            t={t}
+            automation={runNowTarget}
+            busy={busyKey === actionKey('run', runNowTarget.id)}
+            onCancel={() => setRunNowTarget(undefined)}
+            onRun={onRunNow}
+          />
         </AutomationFloat>
       )}
 

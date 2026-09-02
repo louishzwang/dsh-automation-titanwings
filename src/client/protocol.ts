@@ -157,9 +157,12 @@ export interface MutateRequest {
   readonly mutation: 'pause' | 'resume' | 'delete'
 }
 
+export type RunNowMode = 'plain' | 'ahead'
+
 export interface RunNowRequest {
   readonly sessionId: string
   readonly automationId: string
+  readonly mode?: RunNowMode
 }
 
 export interface MarkReadRequest {

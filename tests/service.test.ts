@@ -472,8 +472,9 @@ test('a mutation cancelled while waiting for the service queue never writes dura
   const cancelledMutation = (service.runNow as unknown as (
     requestScope: typeof scope,
     automationId: string,
+    options: { readonly replaceNext?: boolean },
     signal: AbortSignal,
-  ) => Promise<AutomationRun>)(scope, definition.id, controller.signal)
+  ) => Promise<AutomationRun>)(scope, definition.id, {}, controller.signal)
   controller.abort()
   releaseWorkspace()
 
@@ -1129,4 +1130,88 @@ test('catch-up replays occurrences inside the wait window and marks older ones m
   } finally {
     await service.dispose()
   }
+})
+
+test('run-ahead replaces the next schedule occurrence once the manual run succeeds', async (context) => {
+  const now = Date.parse('2026-08-13T07:30:00Z')
+  context.mock.timers.enable({ apis: ['Date', 'setTimeout'], now })
+  const { service, domain } = await harness({ config: { maxConcurrentRuns: 1 }, completeRuns: true })
+  const at = '2026-08-13T08:30:00.000Z'
+  const definition = await service.create(scope, {
+    name: 'Ahead run',
+    prompt: 'Inspect one bounded condition.',
+    schedule: { kind: 'once', at, timeZone: 'UTC' },
+  })
+  const manual = await service.runNow(scope, definition.id, { replaceNext: true })
+  assert.equal(manual.trigger, 'manual')
+  assert.equal(manual.replacesScheduledFor, at)
+
+  service.start()
+  await flushMicrotasks(150)
+  assert.equal([...domain.runs.records.values()][0]?.status, 'succeeded')
+  // The planned 08:30 occurrence must not fire: the succeeded ahead run owns it.
+  context.mock.timers.tick(60 * 60_000 + 1)
+  await flushMicrotasks(150)
+  const runs = [...domain.runs.records.values()]
+  assert.equal(runs.length, 1)
+  assert.equal(runs[0]?.trigger, 'manual')
+  assert.equal(runs[0]?.replacesScheduledFor, at)
+  await service.dispose()
+})
+
+test('a plain manual run leaves the scheduled occurrence intact', async (context) => {
+  const now = Date.parse('2026-08-13T07:30:00Z')
+  context.mock.timers.enable({ apis: ['Date', 'setTimeout'], now })
+  const { service, domain } = await harness({ config: { maxConcurrentRuns: 1 }, completeRuns: true })
+  const at = '2026-08-13T08:30:00.000Z'
+  const definition = await service.create(scope, {
+    name: 'Plain run',
+    prompt: 'Inspect one bounded condition.',
+    schedule: { kind: 'once', at, timeZone: 'UTC' },
+  })
+  const manual = await service.runNow(scope, definition.id)
+  assert.equal(manual.replacesScheduledFor, null)
+
+  service.start()
+  await flushMicrotasks(150)
+  assert.equal([...domain.runs.records.values()][0]?.status, 'succeeded')
+  context.mock.timers.tick(60 * 60_000 + 1)
+  await flushMicrotasks(150)
+  const runs = [...domain.runs.records.values()]
+  // The scheduled occurrence is claimed and started despite the manual run;
+  // its final state here is a harness artifact (the stub agent is single-use).
+  const scheduleRun = runs.find(run => run.trigger === 'schedule')
+  assert.equal(runs.length, 2)
+  assert.equal(scheduleRun?.scheduledFor, at)
+  await service.dispose()
+})
+
+test('a failed run-ahead keeps the scheduled occurrence alive', async (context) => {
+  const now = Date.parse('2026-08-13T07:30:00Z')
+  context.mock.timers.enable({ apis: ['Date', 'setTimeout'], now })
+  const { service, domain } = await harness()
+  const at = '2026-08-13T08:30:00.000Z'
+  const definition = await service.create(scope, {
+    name: 'Failed ahead run',
+    prompt: 'Inspect one bounded condition.',
+    schedule: { kind: 'once', at, timeZone: 'UTC' },
+  })
+  const manual = await service.runNow(scope, definition.id, { replaceNext: true })
+  // Simulate the manual execution failing before the planned time.
+  await domain.runs.put(manual.id, {
+    ...manual,
+    status: 'failed',
+    finishedAt: '2026-08-13T07:35:00.000Z',
+  })
+
+  service.start()
+  await flushMicrotasks(60)
+  context.mock.timers.tick(60 * 60_000 + 1)
+  await flushMicrotasks(60)
+  const runs = [...domain.runs.records.values()]
+  assert.equal(runs.length, 2)
+  const scheduleRun = runs.find(run => run.trigger === 'schedule')
+  assert.equal(scheduleRun?.scheduledFor, at)
+  assert.equal(scheduleRun?.status, 'queued')
+  await service.dispose()
 })

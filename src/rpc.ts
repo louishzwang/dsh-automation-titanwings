@@ -274,7 +274,16 @@ export function registerAutomationRpc(ctx: RpcContext, service: AutomationServic
           return { ok: true, value: { id: value.id, revision: value.revision } }
         }
         case 'run-now': {
-          const run = await service.runNow(scopeOf(payload), string(payload.automationId, 'automationId'), signal)
+          const mode = optionalString(payload.mode, 'mode')
+          if (mode !== undefined && mode !== 'plain' && mode !== 'ahead') {
+            throw new Error('mode must be plain or ahead')
+          }
+          const run = await service.runNow(
+            scopeOf(payload),
+            string(payload.automationId, 'automationId'),
+            { replaceNext: mode === 'ahead' },
+            signal,
+          )
           return { ok: true, value: { runId: run.id } }
         }
         case 'mark-read': {

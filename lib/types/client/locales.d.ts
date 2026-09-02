@@ -49,6 +49,13 @@ export declare const en: {
     readonly 'settings.missedRuns.maxHint': "Each automation replays at most its most recent N missed runs so a long backlog cannot drain your quota (default 1, 1-1000).";
     readonly 'settings.missedRuns.errorMax': "Replay count must be an integer between 1 and 1000.";
     readonly 'settings.missedRuns.errorCustomWait': "Custom wait time must be an integer between 1 and 525600 minutes.";
+    readonly 'run.title': "Run now";
+    readonly 'run.ahead': "Run ahead (replaces this scheduled run)";
+    readonly 'run.aheadHint': "Runs immediately; on success this schedule is treated as done and will not fire at its planned time.";
+    readonly 'run.plain': "Run once only (schedule unchanged)";
+    readonly 'run.plainHint': "The planned time stays and still fires as scheduled; you can run manually any number of times before it.";
+    readonly 'run.noPlan': "This automation has no pending schedule, so only a plain manual run is available.";
+    readonly 'run.confirm': "Run";
     readonly 'section.refresh': "Refresh";
     readonly 'view.todayTasks': "Today";
     readonly 'view.allTasks': "All tasks";

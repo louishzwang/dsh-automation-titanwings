@@ -20,7 +20,7 @@ export interface AutomationFloatAnchor {
 }
 /** Keep the complete floating editor inside even a narrow visual viewport. */
 export declare function clampAutomationFloatBox(value: AutomationFloatBox, viewport: AutomationFloatViewport): AutomationFloatBox;
-export declare function initialAutomationFloatBox(anchor?: AutomationFloatAnchor, viewport?: AutomationFloatViewport): AutomationFloatBox;
+export declare function initialAutomationFloatBox(anchor?: AutomationFloatAnchor, viewport?: AutomationFloatViewport, initialHeight?: number): AutomationFloatBox;
 export declare function RecentRun({ run, now, t, busy, automationMissing, confirmingDelete, onOpen, onMarkRead, onReadd, onConfirmDelete, onDelete }: {
     run: AutomationRunViewModel;
     now: Date;

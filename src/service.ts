@@ -343,7 +343,12 @@ export class AutomationService {
     return { id, deleted }
   }
 
-  async runNow(scope: AutomationScope, id: string, signal?: AbortSignal): Promise<AutomationRun> {
+  async runNow(
+    scope: AutomationScope,
+    id: string,
+    options: { readonly replaceNext?: boolean } = {},
+    signal?: AbortSignal,
+  ): Promise<AutomationRun> {
     const run = await this.serialize(async () => {
       const definition = await this.ownedDefinition(scope, id)
       throwIfCancelled(signal)
@@ -352,7 +357,14 @@ export class AutomationService {
         && (candidate.status === 'queued' || candidate.status === 'running')
       ))
       if (alreadyActive) throw new Error('The automation already has a queued or running run.')
-      const value = createManualRun(definition, toIso())
+      const now = toIso()
+      // "Run ahead": this manual run takes the place of the next scheduled
+      // occurrence. Once it succeeds that occurrence is treated as handled.
+      // Without a future occurrence the manual run is a plain one-off.
+      const replacesScheduledFor = options.replaceNext === true
+        ? nextOccurrence(definition.schedule, now)
+        : null
+      const value = createManualRun(definition, now, undefined, replacesScheduledFor)
       await this.runs.put(value.id, value)
       return value
     }, signal)
@@ -480,6 +492,7 @@ export class AutomationService {
     const related = [...this.runs.entries()].map(([, run]) => run)
       .filter(run => run.automationId === definition.id)
     if (related.some(run => run.trigger === 'schedule' && run.scheduledFor === scheduledFor)) return
+    if (this.isReplacedByManualRun(related, scheduledFor)) return
     const candidate = createScheduledRun(definition, scheduledFor)
     if (this.runs.get(candidate.id) !== undefined) return
     const overlapping = related.some(run => run.status === 'queued' || run.status === 'running')
@@ -542,6 +555,7 @@ export class AutomationService {
     const backlog = candidates.slice(-this.settings().catchUpMissedRunsMax)
     for (const scheduledFor of backlog) {
       if (related.some(run => run.trigger === 'schedule' && run.scheduledFor === scheduledFor)) continue
+      if (this.isReplacedByManualRun(related, scheduledFor)) continue
       const candidate = createScheduledRun(definition, scheduledFor)
       if (this.runs.get(candidate.id) !== undefined) continue
       await this.runs.put(candidate.id, candidate)
@@ -561,6 +575,7 @@ export class AutomationService {
       ).slice(-this.settings().catchUpMissedRunsMax)
       for (const scheduledFor of stale) {
         if (related.some(run => run.trigger === 'schedule' && run.scheduledFor === scheduledFor)) continue
+        if (this.isReplacedByManualRun(related, scheduledFor)) continue
         const candidate = createScheduledRun(definition, scheduledFor)
         if (this.runs.get(candidate.id) !== undefined) continue
         await this.runs.put(candidate.id, {
@@ -572,6 +587,18 @@ export class AutomationService {
         })
       }
     }
+  }
+
+  /** A succeeded "run ahead" manual run counts as having handled its target occurrence. */
+  private isReplacedByManualRun(
+    related: readonly AutomationRun[],
+    scheduledFor: string,
+  ): boolean {
+    return related.some(run => (
+      run.trigger === 'manual'
+      && run.status === 'succeeded'
+      && run.replacesScheduledFor === scheduledFor
+    ))
   }
 
   private async startQueuedRuns(): Promise<void> {

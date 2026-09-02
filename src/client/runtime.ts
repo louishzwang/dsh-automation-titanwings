@@ -8,6 +8,7 @@ import type {
   MarkReadRequest,
   MutateRequest,
   RunNowRequest,
+  RunNowMode,
   SettingsUpdateInput,
   SnapshotRequest,
   UpdateAutomationInput,
@@ -37,7 +38,7 @@ export interface AutomationRuntime {
   createAutomation(input: CreateAutomationInput): Promise<void>
   updateAutomation(automationId: string, expectedRevision: number, input: UpdateAutomationInput): Promise<void>
   mutateAutomation(automationId: string, mutation: MutateRequest['mutation']): Promise<void>
-  runNow(automationId: string): Promise<void>
+  runNow(automationId: string, mode: RunNowMode): Promise<void>
   markRunRead(runId: string): Promise<void>
   archiveRun(runId: string): Promise<void>
   deleteRun(runId: string): Promise<void>
@@ -158,8 +159,8 @@ export function createAutomationRuntime(rpc: ClientRpc, sessionId: string): Auto
       const payload: MutateRequest = { sessionId, automationId, mutation }
       await mutateThenRefresh('mutate', payload)
     },
-    async runNow(automationId) {
-      const payload: RunNowRequest = { sessionId, automationId }
+    async runNow(automationId, mode) {
+      const payload: RunNowRequest = { sessionId, automationId, mode }
       await mutateThenRefresh('run-now', payload)
     },
     markRunRead,
