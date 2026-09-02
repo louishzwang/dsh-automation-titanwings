@@ -8,9 +8,11 @@ import type {
   MarkReadRequest,
   MutateRequest,
   RunNowRequest,
+  SettingsUpdateInput,
   SnapshotRequest,
   UpdateAutomationInput,
   UpdateRequest,
+  UpdateSettingsRequest,
   ModelCatalog,
 } from './protocol.js'
 import { unwrapRpcResult } from './protocol.js'
@@ -39,6 +41,7 @@ export interface AutomationRuntime {
   markRunRead(runId: string): Promise<void>
   archiveRun(runId: string): Promise<void>
   deleteRun(runId: string): Promise<void>
+  updateSettings(settings: SettingsUpdateInput): Promise<void>
   openRunSession(runId: string, open: () => Promise<void>): Promise<void>
 }
 
@@ -162,6 +165,10 @@ export function createAutomationRuntime(rpc: ClientRpc, sessionId: string): Auto
     markRunRead,
     archiveRun,
     deleteRun,
+    async updateSettings(settings) {
+      const payload: UpdateSettingsRequest = { sessionId, settings }
+      await mutateThenRefresh('settings-update', payload)
+    },
     async openRunSession(runId, open) {
       // A failed navigation must leave the run unread so it still asks for
       // attention. Mark it only after the destination Session is available.

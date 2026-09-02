@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { createDefinition, createManualRun } from '../src/domain.ts'
+import { createDefinition, createManualRun, createScheduledRun } from '../src/domain.ts'
 import { AutomationService, type AutomationConfig } from '../src/service.ts'
 import type { AutomationDefinition, AutomationRun } from '../src/types.ts'
 
@@ -57,6 +57,8 @@ const defaults: AutomationConfig = {
   misfireGraceMs: 15 * 60_000,
   historyLimit: 200,
   archiveRunSessions: false,
+  catchUpMissedRuns: false,
+  catchUpMissedRunsMax: 30,
 }
 
 function storedDefinition(now: string): AutomationDefinition {
@@ -910,6 +912,220 @@ test('scheduler materializes only the latest due interval and records overlap', 
     assert.equal(scheduled.unread, true)
     assert.equal(scheduled.error?.code, 'overlap')
     assert.equal(Date.parse(scheduled.scheduledFor), Date.parse(anchor) + 5 * 60_000)
+  } finally {
+    await service.dispose()
+  }
+})
+
+test('catch-up mode queues every missed daily occurrence instead of misfire skipping', async (context) => {
+  const now = Date.parse('2026-08-13T10:00:00Z')
+  context.mock.timers.enable({ apis: ['Date', 'setTimeout'], now })
+  const createdAt = '2026-08-11T08:00:00Z'
+  const definition = createDefinition({
+    id: 'automation-catchup-daily',
+    name: 'Catch-up daily',
+    prompt: 'Inspect one bounded condition.',
+    schedule: { kind: 'daily', time: '09:00', timeZone: 'UTC' },
+    workspaceId: 'workspace-1',
+    cwd: '/workspace/repo',
+    agentPreset: 'standard',
+    createdBy: { kind: 'web', sessionId: scope.sessionId },
+    now: createdAt,
+  })
+  const { service, domain } = await harness({
+    definitions: [definition],
+    config: { catchUpMissedRuns: true, misfireGraceMs: 1e12, catchUpMissedRunsMax: 30 },
+  })
+  try {
+    service.start()
+    await flushMicrotasks()
+    const runs = [...domain.runs.records.values()]
+    assert.equal(runs.length, 3)
+    assert.deepEqual(runs.map(run => run.scheduledFor), [
+      '2026-08-11T09:00:00.000Z',
+      '2026-08-12T09:00:00.000Z',
+      '2026-08-13T09:00:00.000Z',
+    ])
+    for (const run of runs) {
+      assert.equal(run.trigger, 'schedule')
+      assert.equal(run.status, 'queued')
+    }
+    assert.equal(runs.some(run => run.status === 'skipped'), false)
+  } finally {
+    await service.dispose()
+  }
+})
+
+test('catch-up mode caps backlog to the most recent occurrences and never replays handled ones', async (context) => {
+  const now = Date.parse('2026-08-13T10:00:00Z')
+  context.mock.timers.enable({ apis: ['Date', 'setTimeout'], now })
+  const definition = createDefinition({
+    id: 'automation-catchup-cap',
+    name: 'Catch-up cap',
+    prompt: 'Inspect one bounded condition.',
+    schedule: { kind: 'daily', time: '09:00', timeZone: 'UTC' },
+    workspaceId: 'workspace-1',
+    cwd: '/workspace/repo',
+    agentPreset: 'standard',
+    createdBy: { kind: 'web', sessionId: scope.sessionId },
+    now: '2026-07-04T08:00:00Z',
+  })
+  const handled = {
+    ...createScheduledRun(definition, '2026-07-10T09:00:00.000Z'),
+    status: 'succeeded' as const,
+    finishedAt: '2026-07-10T09:05:00.000Z',
+    sessionId: null,
+  }
+  const { service, domain } = await harness({
+    definitions: [definition],
+    runs: [handled],
+    config: { catchUpMissedRuns: true, misfireGraceMs: 1e12, catchUpMissedRunsMax: 30 },
+  })
+  try {
+    service.start()
+    await flushMicrotasks()
+    const runs = [...domain.runs.records.values()]
+    const claimed = runs.filter(run => run.trigger === 'schedule' && run.status === 'queued')
+    assert.equal(runs.length, 31)
+    assert.equal(claimed.length, 30)
+    // The most recent 30 of the 34 unhandled occurrences (7/11-8/13) win,
+    // so the earliest 4 (7/11-7/14) are dropped.
+    assert.equal(claimed[0]?.scheduledFor, '2026-07-15T09:00:00.000Z')
+    assert.equal(claimed.at(-1)?.scheduledFor, '2026-08-13T09:00:00.000Z')
+    const scheduledFors = claimed.map(run => run.scheduledFor)
+    assert.equal(new Set(scheduledFors).size, 30)
+    assert.equal(scheduledFors.includes(handled.scheduledFor), false)
+  } finally {
+    await service.dispose()
+  }
+})
+
+test('catch-up disabled keeps the stale-occurrence misfire skip unchanged', async (context) => {
+  const now = Date.parse('2026-08-13T10:00:00Z')
+  context.mock.timers.enable({ apis: ['Date', 'setTimeout'], now })
+  const definition = createDefinition({
+    id: 'automation-grace-skip',
+    name: 'Grace skip',
+    prompt: 'Inspect one bounded condition.',
+    schedule: { kind: 'daily', time: '09:00', timeZone: 'UTC' },
+    workspaceId: 'workspace-1',
+    cwd: '/workspace/repo',
+    agentPreset: 'standard',
+    createdBy: { kind: 'web', sessionId: scope.sessionId },
+    now: '2026-08-11T08:00:00Z',
+  })
+  const { service, domain } = await harness({ definitions: [definition] })
+  try {
+    service.start()
+    await flushMicrotasks()
+    const runs = [...domain.runs.records.values()]
+    assert.equal(runs.length, 1)
+    assert.equal(runs[0]?.trigger, 'schedule')
+    assert.equal(runs[0]?.status, 'skipped')
+    assert.equal(runs[0]?.unread, true)
+    assert.equal(runs[0]?.error?.code, 'misfire')
+    assert.equal(runs[0]?.scheduledFor, '2026-08-13T09:00:00.000Z')
+  } finally {
+    await service.dispose()
+  }
+})
+
+test('settings owner overrides the cordis defaults and persists through updateSettings', async (context) => {
+  const now = Date.parse('2026-08-13T10:00:00Z')
+  context.mock.timers.enable({ apis: ['Date', 'setTimeout'], now })
+  const definition = createDefinition({
+    id: 'automation-settings-policy',
+    name: 'Settings policy',
+    prompt: 'Inspect one bounded condition.',
+    schedule: { kind: 'daily', time: '09:00', timeZone: 'UTC' },
+    workspaceId: 'workspace-1',
+    cwd: '/workspace/repo',
+    agentPreset: 'standard',
+    createdBy: { kind: 'web', sessionId: scope.sessionId },
+    now: '2026-08-11T08:00:00Z',
+  })
+  // Cordis config says catch up, but the durable settings namespace (stored)
+  // says skip: the owner must win at admission time.
+  let stored = { catchUpMissedRuns: false, catchUpMissedRunsMax: 30, misfireGraceMinutes: 15 }
+  const owner = {
+    get: () => stored,
+    update: async (next: typeof stored) => { stored = next },
+  }
+  const { service, domain } = await harness({
+    definitions: [definition],
+    config: { catchUpMissedRuns: true, misfireGraceMs: 1e12, catchUpMissedRunsMax: 30 },
+  })
+  try {
+    // Before attachment the config fallback applies.
+    assert.equal(service.settings().catchUpMissedRuns, true)
+    service.attachSettings(owner)
+    assert.deepEqual(service.settings(), stored)
+
+    service.start()
+    await flushMicrotasks()
+    const runs = [...domain.runs.records.values()]
+    assert.equal(runs.length, 1)
+    assert.equal(runs[0]?.status, 'skipped')
+    assert.equal(runs[0]?.error?.code, 'misfire')
+
+    const saved = await service.updateSettings(scope, {
+      catchUpMissedRuns: true,
+      catchUpMissedRunsMax: 7,
+      misfireGraceMinutes: 45,
+    })
+    assert.deepEqual(saved, stored)
+    assert.deepEqual(service.settings(), {
+      catchUpMissedRuns: true,
+      catchUpMissedRunsMax: 7,
+      misfireGraceMinutes: 45,
+    })
+  } finally {
+    await service.dispose()
+  }
+})
+
+test('catch-up replays occurrences inside the wait window and marks older ones missed', async (context) => {
+  const now = Date.parse('2026-08-13T10:00:00Z')
+  context.mock.timers.enable({ apis: ['Date', 'setTimeout'], now })
+  const definition = createDefinition({
+    id: 'automation-catchup-window',
+    name: 'Catch-up window',
+    prompt: 'Inspect one bounded condition.',
+    schedule: { kind: 'daily', time: '09:00', timeZone: 'UTC' },
+    workspaceId: 'workspace-1',
+    cwd: '/workspace/repo',
+    agentPreset: 'standard',
+    createdBy: { kind: 'web', sessionId: scope.sessionId },
+    now: '2026-08-11T08:00:00Z',
+  })
+  // A 2h wait window starting at 08:00: the two earlier daily runs fall
+  // outside and are marked missed; only today's 09:00 occurrence is replayed.
+  const { service, domain } = await harness({
+    definitions: [definition],
+    config: {
+      catchUpMissedRuns: true,
+      misfireGraceMs: 2 * 60 * 60_000,
+      catchUpMissedRunsMax: 30,
+    },
+  })
+  try {
+    service.start()
+    await flushMicrotasks()
+    const runs = [...domain.runs.records.values()]
+    assert.equal(runs.length, 3)
+    const replayed = runs.filter(run => run.status === 'queued')
+    const missed = runs.filter(run => run.status === 'skipped')
+    assert.equal(replayed.length, 1)
+    assert.equal(replayed[0]?.scheduledFor, '2026-08-13T09:00:00.000Z')
+    assert.equal(missed.length, 2)
+    assert.deepEqual(missed.map(run => run.scheduledFor).sort(), [
+      '2026-08-11T09:00:00.000Z',
+      '2026-08-12T09:00:00.000Z',
+    ])
+    for (const run of missed) {
+      assert.equal(run.trigger, 'schedule')
+      assert.equal(run.unread, true)
+    }
   } finally {
     await service.dispose()
   }

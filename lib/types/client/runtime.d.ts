@@ -1,5 +1,5 @@
 import type { ClientRemote, ClientRpc } from './contracts.js';
-import type { AutomationSnapshot, CreateAutomationInput, MutateRequest, UpdateAutomationInput, ModelCatalog } from './protocol.js';
+import type { AutomationSnapshot, CreateAutomationInput, MutateRequest, SettingsUpdateInput, UpdateAutomationInput, ModelCatalog } from './protocol.js';
 export interface AutomationClientState {
     readonly phase: 'idle' | 'loading' | 'ready' | 'error' | 'unavailable';
     readonly snapshot?: AutomationSnapshot;
@@ -20,6 +20,7 @@ export interface AutomationRuntime {
     markRunRead(runId: string): Promise<void>;
     archiveRun(runId: string): Promise<void>;
     deleteRun(runId: string): Promise<void>;
+    updateSettings(settings: SettingsUpdateInput): Promise<void>;
     openRunSession(runId: string, open: () => Promise<void>): Promise<void>;
 }
 /** Load the Host catalog through the Session remote service DSH 2.0.x ships. */

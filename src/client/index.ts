@@ -56,6 +56,7 @@ export function apply(ctx: ClientContext): void {
         markRunRead: runtime.markRunRead,
         archiveRun: runtime.archiveRun,
         deleteRun: runtime.deleteRun,
+        updateSettings: runtime.updateSettings,
         loadModelCatalog: readModelCatalog,
         refreshSessions: () => ctx.sessions.refresh(),
         openSession: (runId, runSessionId) => runtime!.openRunSession(runId, async () => {

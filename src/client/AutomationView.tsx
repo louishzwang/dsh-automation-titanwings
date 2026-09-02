@@ -41,6 +41,8 @@ import {
   AutomationIcon,
   CalendarIcon,
   CheckIcon,
+  ChevronIcon,
+  GearIcon,
   GlobeIcon,
   PauseIcon,
   PencilIcon,
@@ -53,9 +55,11 @@ import {
 import type {
   AutomationRunStatus,
   AutomationRunViewModel,
+  AutomationSettingsView,
   AutomationViewModel,
   CreateAutomationInput,
   ModelCatalog,
+  SettingsUpdateInput,
   UpdateAutomationInput,
 } from './protocol.js'
 
@@ -126,7 +130,7 @@ const SORT_STORAGE: SortPreferenceStorage | undefined = resolveSortPreferenceSto
   typeof window === 'undefined' ? undefined : window,
 )
 
-type BusyAction = 'create' | 'update' | 'pause' | 'resume' | 'run' | 'read' | 'delete' | 'delete-run'
+type BusyAction = 'create' | 'update' | 'pause' | 'resume' | 'run' | 'read' | 'delete' | 'delete-run' | 'settings'
 type TaskView = 'today' | 'all'
 type CalendarRangeView = 'list' | 'week' | 'month'
 
@@ -746,6 +750,164 @@ function AutomationForm(props: AutomationFormProps): JSX.Element {
   )
 }
 
+interface AutomationSettingsPanelProps {
+  readonly t: Translate
+  readonly settings: AutomationSettingsView
+  readonly busy: boolean
+  readonly saveError?: string | undefined
+  readonly onCancel: () => void
+  readonly onSubmit: (next: SettingsUpdateInput) => Promise<void>
+}
+
+/** Host-wide preferences; the entry point for future custom automation options. */
+const WAIT_PRESET_VALUES: readonly number[] = [30, 60, 300, 720, 1_440, 525_600]
+const CUSTOM_WAIT = -1
+
+function waitOptionKey(minutes: number): AutomationLocaleKey {
+  switch (minutes) {
+    case 30: return 'settings.missedRuns.waitOpt.m30'
+    case 60: return 'settings.missedRuns.waitOpt.h1'
+    case 300: return 'settings.missedRuns.waitOpt.h5'
+    case 720: return 'settings.missedRuns.waitOpt.h12'
+    case 1_440: return 'settings.missedRuns.waitOpt.h24'
+    default: return 'settings.missedRuns.waitOpt.forever'
+  }
+}
+
+/** Whether the stored wait (minutes) is one of the offered presets. */
+function waitPresetValue(value: number): number | undefined {
+  return WAIT_PRESET_VALUES.find(candidate => candidate === value)
+}
+
+function AutomationSettingsPanel(props: AutomationSettingsPanelProps): JSX.Element {
+  const { t, settings, busy, saveError, onCancel, onSubmit } = props
+  const [open, setOpen] = useState(true)
+  const [catchUpMissedRuns, setCatchUpMissedRuns] = useState(settings.catchUpMissedRuns)
+  const [waitChoice, setWaitChoice] = useState<number>(() => (
+    waitPresetValue(settings.misfireGraceMinutes) ?? CUSTOM_WAIT
+  ))
+  const [customWait, setCustomWait] = useState(() => String(Math.max(1, settings.misfireGraceMinutes)))
+  const [catchUpMax, setCatchUpMax] = useState(String(settings.catchUpMissedRunsMax))
+  const [validationError, setValidationError] = useState<string>()
+
+  const submit = (event: FormEvent): void => {
+    event.preventDefault()
+    setValidationError(undefined)
+    const max = Number.parseInt(catchUpMax, 10)
+    if (!Number.isInteger(max) || max < 1 || max > 1_000) {
+      setValidationError(t('settings.missedRuns.errorMax'))
+      return
+    }
+    const wait = waitChoice === CUSTOM_WAIT ? Number.parseInt(customWait, 10) : waitChoice
+    if (waitChoice === CUSTOM_WAIT && (!Number.isInteger(wait) || wait < 1 || wait > 525_600)) {
+      setValidationError(t('settings.missedRuns.errorCustomWait'))
+      return
+    }
+    void onSubmit({
+      catchUpMissedRuns,
+      catchUpMissedRunsMax: max,
+      // "Mark only" never replays: it stores a near-zero grace so any late
+      // occurrence is immediately marked as missed.
+      misfireGraceMinutes: catchUpMissedRuns ? wait : 1,
+    })
+  }
+
+  return (
+    <form className="dsh-automation-create" onSubmit={submit}>
+      <div className="dsh-automation-create-heading">
+        <h2>{t('settings.title')}</h2>
+        <button className="dsh-automation-button dsh-automation-button--ghost" type="button" onClick={onCancel} disabled={busy}>
+          {t('form.cancel')}
+        </button>
+      </div>
+
+      <div className="dsh-automation-form-grid">
+        <section className="dsh-automation-settings-section dsh-automation-field--wide">
+          <button
+            type="button"
+            className="dsh-automation-settings-section-head"
+            aria-expanded={open}
+            onClick={() => setOpen(current => !current)}
+          >
+            <ChevronIcon className="dsh-automation-chevron" />
+            <h3>{t('settings.missedRuns.title')}</h3>
+          </button>
+          {open && (
+            <div className="dsh-automation-settings-section-body">
+              <p className="dsh-automation-settings-lead">{t('settings.missedRuns.lead')}</p>
+              <label className="dsh-automation-field">
+                <span>{t('settings.missedRuns.strategy')}</span>
+                <select
+                  value={catchUpMissedRuns ? 'catch-up' : 'skip'}
+                  onChange={event => setCatchUpMissedRuns(event.currentTarget.value === 'catch-up')}
+                >
+                  <option value="catch-up">{t('settings.missedRuns.strategyCatchUp')}</option>
+                  <option value="skip">{t('settings.missedRuns.strategySkip')}</option>
+                </select>
+              </label>
+              {catchUpMissedRuns ? (
+                <>
+                  <label className="dsh-automation-field">
+                    <span>{t('settings.missedRuns.waitLabel')}</span>
+                    <select
+                      value={waitChoice}
+                      onChange={event => setWaitChoice(Number(event.currentTarget.value))}
+                    >
+                      {WAIT_PRESET_VALUES.map(minutes => (
+                        <option key={minutes} value={minutes}>{t(waitOptionKey(minutes))}</option>
+                      ))}
+                      <option value={CUSTOM_WAIT}>{t('settings.missedRuns.waitOpt.custom')}</option>
+                    </select>
+                    {waitChoice === CUSTOM_WAIT && (
+                      <span className="dsh-automation-inline-input">
+                        <input
+                          type="number"
+                          min={1}
+                          max={525_600}
+                          step={1}
+                          value={customWait}
+                          onChange={event => setCustomWait(event.currentTarget.value)}
+                        />
+                        <span>{t('settings.missedRuns.waitUnitMin')}</span>
+                      </span>
+                    )}
+                    <small>{t('settings.missedRuns.waitHint')}</small>
+                  </label>
+                  <label className="dsh-automation-field">
+                    <span>{t('settings.missedRuns.maxLabel')}</span>
+                    <span className="dsh-automation-inline-input">
+                      <input
+                        type="number"
+                        min={1}
+                        max={1_000}
+                        step={1}
+                        value={catchUpMax}
+                        onChange={event => setCatchUpMax(event.currentTarget.value)}
+                      />
+                      <span>{t('settings.missedRuns.times')}</span>
+                    </span>
+                    <small>{t('settings.missedRuns.maxHint')}</small>
+                  </label>
+                </>
+              ) : (
+                <p className="dsh-automation-settings-lead">{t('settings.missedRuns.skipBody')}</p>
+              )}
+            </div>
+          )}
+        </section>
+      </div>
+
+      <div className="dsh-automation-form-footer">
+        <span className="dsh-automation-form-error" role="alert">{validationError ?? saveError}</span>
+        <button className="dsh-automation-button dsh-automation-button--primary" type="submit" disabled={busy}>
+          <CheckIcon />
+          {busy ? t('settings.saving') : t('settings.save')}
+        </button>
+      </div>
+    </form>
+  )
+}
+
 interface AutomationCardProps {
   readonly automation: AutomationViewModel
   readonly now: Date
@@ -924,10 +1086,11 @@ export function RecentRun({ run, now, t, busy, automationMissing, confirmingDele
 /** Native conversation view: all data and effects arrive through the slot's four shares. */
 export function AutomationView({
   t, useAutomationState, refresh, createAutomation, updateAutomation, mutateAutomation, runNow, markRunRead,
-  deleteRun, loadModelCatalog, openSession, refreshSessions,
+  deleteRun, updateSettings, loadModelCatalog, openSession, refreshSessions,
 }: AutomationViewProps): JSX.Element {
   const state = useAutomationState(value => value)
   const [showCreate, setShowCreate] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(false)
   const [editingAutomation, setEditingAutomation] = useState<AutomationViewModel>()
   const [busyKey, setBusyKey] = useState<string>()
   const [actionError, setActionError] = useState<string>()
@@ -945,6 +1108,7 @@ export function AutomationView({
   const draftRef = useRef<{ form: AutomationFormState | undefined }>({ form: undefined })
   const createAnchorRef = useRef<DOMRect | undefined>(undefined)
   const editAnchorRef = useRef<DOMRect | undefined>(undefined)
+  const settingsAnchorRef = useRef<DOMRect | undefined>(undefined)
   const runsSignatureRef = useRef('')
   const phaseRef = useRef(state.phase)
   phaseRef.current = state.phase
@@ -1179,6 +1343,25 @@ export function AutomationView({
     editAnchorRef.current = anchor
     setEditingAutomation(automation)
   }
+  const openSettings = (event: ReactMouseEvent<HTMLElement>): void => {
+    if (settingsOpen) {
+      setSettingsOpen(false)
+      return
+    }
+    setEditingAutomation(undefined)
+    settingsAnchorRef.current = event.currentTarget.getBoundingClientRect()
+    setSettingsOpen(true)
+  }
+  const onSaveSettings = async (next: SettingsUpdateInput): Promise<void> => {
+    let saved = false
+    await perform(actionKey('settings'), async () => {
+      await updateSettings(next)
+      saved = true
+    })
+    // Only close on success so a rejected save keeps the panel and its error
+    // visible instead of silently reverting to the previous values.
+    if (saved) setSettingsOpen(false)
+  }
 
   if (snapshot === undefined && (state.phase === 'idle' || state.phase === 'loading')) {
     return (
@@ -1279,6 +1462,31 @@ export function AutomationView({
             onCancel={() => setEditingAutomation(undefined)}
             onSubmit={onUpdate}
           />
+        </AutomationFloat>
+      )}
+
+      {settingsOpen && (
+        <AutomationFloat label={t('settings.title')} busy={busyKey === actionKey('settings')} onClose={() => setSettingsOpen(false)} anchor={settingsAnchorRef.current}>
+          {snapshot.settings === undefined ? (
+            <div className="dsh-automation-create">
+              <div className="dsh-automation-create-heading">
+                <h2>{t('settings.title')}</h2>
+                <button className="dsh-automation-button dsh-automation-button--ghost" type="button" onClick={() => setSettingsOpen(false)}>
+                  {t('form.cancel')}
+                </button>
+              </div>
+              <p className="dsh-automation-settings-lead">{t('settings.unavailable')}</p>
+            </div>
+          ) : (
+            <AutomationSettingsPanel
+              t={t}
+              settings={snapshot.settings}
+              busy={busyKey === actionKey('settings')}
+              saveError={actionError}
+              onCancel={() => setSettingsOpen(false)}
+              onSubmit={onSaveSettings}
+            />
+          )}
         </AutomationFloat>
       )}
 
@@ -1447,6 +1655,14 @@ export function AutomationView({
                   {(stats?.attention ?? 0) > 0 && <b>{stats?.attention ?? 0}</b>}
                 </span>
               </span>
+              <button
+                className="dsh-automation-runs-settings"
+                type="button"
+                onClick={openSettings}
+              >
+                <GearIcon />
+                <span>{t('settings.open')}</span>
+              </button>
             </div>
             {snapshot.runs.length === 0
               ? <div className="dsh-automation-runs-empty">{t('runs.empty')}</div>

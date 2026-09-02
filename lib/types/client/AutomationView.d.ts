@@ -35,4 +35,4 @@ export declare function RecentRun({ run, now, t, busy, automationMissing, confir
     onDelete: (runId: string) => void;
 }): JSX.Element;
 /** Native conversation view: all data and effects arrive through the slot's four shares. */
-export declare function AutomationView({ t, useAutomationState, refresh, createAutomation, updateAutomation, mutateAutomation, runNow, markRunRead, deleteRun, loadModelCatalog, openSession, refreshSessions, }: AutomationViewProps): JSX.Element;
+export declare function AutomationView({ t, useAutomationState, refresh, createAutomation, updateAutomation, mutateAutomation, runNow, markRunRead, deleteRun, updateSettings, loadModelCatalog, openSession, refreshSessions, }: AutomationViewProps): JSX.Element;

@@ -16,7 +16,7 @@ import {
   updateDefinition,
 } from './domain.ts'
 import { executeAutomationRun } from './executor.ts'
-import { latestDueOccurrence, nextOccurrence } from './recurrence.ts'
+import { latestDueOccurrence, nextOccurrence, occurrencesBetween } from './recurrence.ts'
 import type {
   AutomationDefinition,
   AutomationRun,
@@ -34,6 +34,23 @@ export interface AutomationConfig {
   readonly misfireGraceMs: number
   readonly historyLimit: number
   readonly archiveRunSessions: boolean
+  /** Replay missed occurrences after a host resume instead of skipping stale ones. */
+  readonly catchUpMissedRuns: boolean
+  /** Backlog cap per automation when catchUpMissedRuns is enabled (most recent occurrences win). */
+  readonly catchUpMissedRunsMax: number
+}
+
+/** Durable host-wide policy, layered over the cordis config defaults. */
+export interface AutomationSettings {
+  readonly catchUpMissedRuns: boolean
+  readonly catchUpMissedRunsMax: number
+  readonly misfireGraceMinutes: number
+}
+
+/** Minimal shape of the `ctx.settings` namespace owner the service consumes. */
+export interface AutomationSettingsOwner {
+  get(): Readonly<AutomationSettings>
+  update(next: AutomationSettings): Promise<unknown>
 }
 
 export interface CreateRequest {
@@ -106,6 +123,41 @@ export class AutomationService {
     private readonly domain: Domain<typeof automationDomainSpec>,
     private readonly config: AutomationConfig,
   ) {}
+
+  private settingsOwner: AutomationSettingsOwner | undefined
+
+  /**
+   * Bind the durable `ctx.settings` namespace owner (registered by the plugin
+   * entry) so runtime policy changes survive restarts. Without an owner the
+   * cordis config values remain the effective policy, which keeps the service
+   * usable in isolation (tests, missing settings provider).
+   */
+  attachSettings(owner: AutomationSettingsOwner): void {
+    this.settingsOwner = owner
+  }
+
+  /** Effective host-wide policy: the settings namespace when attached, else config defaults. */
+  settings(): Readonly<AutomationSettings> {
+    const owner = this.settingsOwner
+    if (owner !== undefined) return owner.get()
+    return {
+      catchUpMissedRuns: this.config.catchUpMissedRuns,
+      catchUpMissedRunsMax: this.config.catchUpMissedRunsMax,
+      misfireGraceMinutes: Math.round(this.config.misfireGraceMs / 60_000),
+    }
+  }
+
+  /** Persist a new host-wide policy through the settings namespace. */
+  async updateSettings(scope: AutomationScope, next: AutomationSettings, signal?: AbortSignal): Promise<AutomationSettings> {
+    return this.serialize(async () => {
+      await this.resolveScope(scope)
+      throwIfCancelled(signal)
+      const owner = this.settingsOwner
+      if (owner === undefined) throw new Error('The settings namespace is unavailable.')
+      await owner.update(next)
+      return owner.get()
+    }, signal)
+  }
 
   static async open(ctx: Context, config: AutomationConfig): Promise<AutomationService> {
     const domain = await ctx.storageDomain.open(automationDomainSpec)
@@ -411,7 +463,8 @@ export class AutomationService {
     const now = toIso()
     for (const [, definition] of this.definitions.entries()) {
       if (definition.status !== 'active') continue
-      await this.claimLatestDue(definition, now)
+      if (this.settings().catchUpMissedRuns) await this.claimMissedRuns(definition, now)
+      else await this.claimLatestDue(definition, now)
     }
     if (this.stopping) return
     await this.startQueuedRuns()
@@ -431,7 +484,8 @@ export class AutomationService {
     if (this.runs.get(candidate.id) !== undefined) return
     const overlapping = related.some(run => run.status === 'queued' || run.status === 'running')
     const age = Date.parse(now) - Date.parse(scheduledFor)
-    if (overlapping || age > this.config.misfireGraceMs) {
+    const graceMs = this.settings().misfireGraceMinutes * 60_000
+    if (overlapping || age > graceMs) {
       const reason = overlapping
         ? { code: 'overlap', message: 'Skipped because the previous run is still active.' }
         : { code: 'misfire', message: 'Skipped because the host resumed outside the catch-up window.' }
@@ -446,6 +500,78 @@ export class AutomationService {
       return
     }
     await this.runs.put(candidate.id, candidate)
+  }
+
+  /**
+   * Catch-up admission: after a host resume, claim every scheduled occurrence
+   * in (handledThrough, now] that has no run record yet, so nothing the host
+   * missed while it was offline is skipped. Interval schedules stay on the
+   * grace/skip path (backlog replay makes no sense for fixed-rate reminders).
+   * The replay wait ("misfireGraceMinutes") also bounds how far back the
+   * backlog reaches: only occurrences inside the wait window are replayed,
+   * and the most recent `catchUpMissedRunsMax` of those win. Editing a
+   * definition does not cancel its unhandled past occurrences.
+   */
+  private async claimMissedRuns(definition: AutomationDefinition, now: string): Promise<void> {
+    if (definition.schedule.kind === 'interval') {
+      await this.claimLatestDue(definition, now)
+      return
+    }
+    const nowMs = Date.parse(now)
+    const related = [...this.runs.entries()]
+      .map(([, run]) => run)
+      .filter(run => run.automationId === definition.id)
+    if (related.some(run => run.status === 'queued' || run.status === 'running')) return
+    const handledThrough = related
+      .filter(run => run.trigger === 'schedule')
+      .map(run => Date.parse(run.scheduledFor))
+      .reduce((latest, candidate) => Math.max(latest, candidate), Number.NEGATIVE_INFINITY)
+    const waitMs = this.settings().misfireGraceMinutes * 60_000
+    const sinceMs = Math.max(Date.parse(definition.createdAt), handledThrough, nowMs - waitMs)
+    if (sinceMs >= nowMs) return
+    // Daily/weekly/once schedules produce at most one occurrence per day, so a
+    // window-sized limit returns the full candidate list without truncating
+    // the recent end; the backlog slice below then keeps the newest cap.
+    const windowDays = Math.ceil((nowMs - sinceMs) / 86_400_000) + 2
+    const candidates = occurrencesBetween(
+      definition.schedule,
+      new Date(sinceMs).toISOString(),
+      now,
+      windowDays,
+    )
+    const backlog = candidates.slice(-this.settings().catchUpMissedRunsMax)
+    for (const scheduledFor of backlog) {
+      if (related.some(run => run.trigger === 'schedule' && run.scheduledFor === scheduledFor)) continue
+      const candidate = createScheduledRun(definition, scheduledFor)
+      if (this.runs.get(candidate.id) !== undefined) continue
+      await this.runs.put(candidate.id, candidate)
+    }
+    // Occurrences older than the wait window are marked as missed instead of
+    // replayed (most recent ones only), so the run history explains them and
+    // the user can still run them manually.
+    const staleSinceMs = Math.max(Date.parse(definition.createdAt), handledThrough)
+    const staleUntilMs = nowMs - waitMs
+    if (staleUntilMs > staleSinceMs) {
+      const staleDays = Math.ceil((staleUntilMs - staleSinceMs) / 86_400_000) + 2
+      const stale = occurrencesBetween(
+        definition.schedule,
+        new Date(staleSinceMs).toISOString(),
+        new Date(staleUntilMs).toISOString(),
+        staleDays,
+      ).slice(-this.settings().catchUpMissedRunsMax)
+      for (const scheduledFor of stale) {
+        if (related.some(run => run.trigger === 'schedule' && run.scheduledFor === scheduledFor)) continue
+        const candidate = createScheduledRun(definition, scheduledFor)
+        if (this.runs.get(candidate.id) !== undefined) continue
+        await this.runs.put(candidate.id, {
+          ...candidate,
+          status: 'skipped',
+          finishedAt: now,
+          error: { code: 'misfire', message: 'Skipped because it fell outside the replay wait window.' },
+          unread: true,
+        })
+      }
+    }
   }
 
   private async startQueuedRuns(): Promise<void> {

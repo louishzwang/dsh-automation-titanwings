@@ -21,6 +21,7 @@ export interface AutomationViewProps {
   readonly markRunRead: AutomationRuntime['markRunRead']
   readonly archiveRun: AutomationRuntime['archiveRun']
   readonly deleteRun: AutomationRuntime['deleteRun']
+  readonly updateSettings: AutomationRuntime['updateSettings']
   readonly loadModelCatalog: () => Promise<ModelCatalog>
   readonly openSession: (runId: string, sessionId: string) => Promise<void>
   readonly refreshSessions: () => Promise<void>
