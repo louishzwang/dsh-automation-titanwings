@@ -63,7 +63,7 @@ export async function apply(ctx: Context, rawConfig: Config): Promise<void> {
       historyLimit: config.historyLimit,
       archiveRunSessions: config.archiveRunSessions,
     })
-    const agentTools = new Map<object, () => void | Promise<void>>()
+    const agentTools = new Map<string, () => void | Promise<void>>()
     let cleaned = false
     let stopCreated = () => {}
     let stopDisposed = () => {}
@@ -94,21 +94,22 @@ export async function apply(ctx: Context, rawConfig: Config): Promise<void> {
 
     try {
       const mountTools = (agent: any): void => {
-        if (!alive || agentTools.has(agent)
+        if (!alive || agentTools.has(String(agent.id))
           || service.ownsSession(String(agent.id), agent.session.events)) return
         if (!ctx.agents.roots().includes(agent)) return
         const dispose = agent.ctx.effect(
           () => registerAutomationTools(service, agent),
           'dsh-automation: management tools',
         )
-        agentTools.set(agent, dispose)
+        agentTools.set(String(agent.id), dispose)
       }
       for (const agent of ctx.agents.roots()) mountTools(agent)
       stopCreated = ctx.on('agent/created', ({ agent }: any) => { mountTools(agent) })
-      stopDisposed = ctx.on('agent/disposed', ({ agent }: any) => { agentTools.delete(agent) })
+      stopDisposed = ctx.on('agent/disposed', ({ agent }: any) => { agentTools.delete(String(agent.id)) })
       stopApproval = ctx.on('tools/pre-execute', async (exec: any, next: () => Promise<any>) => {
         const downstream = await next()
-        if (downstream.kind !== 'allow' || !needsHumanApproval(exec, agentTools.has(exec.agent))) return downstream
+        if (downstream.kind !== 'allow'
+          || !needsHumanApproval(exec, exec.agent?.id !== undefined && agentTools.has(String(exec.agent.id)))) return downstream
         return {
           kind: 'ask' as const,
           reason: humanApprovalReason(exec.name),
