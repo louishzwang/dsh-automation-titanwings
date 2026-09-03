@@ -1215,3 +1215,81 @@ test('a failed run-ahead keeps the scheduled occurrence alive', async (context) 
   assert.equal(scheduleRun?.status, 'queued')
   await service.dispose()
 })
+
+test('snapshot treats an occurrence fulfilled by a run-ahead as not pending', async () => {
+  const at = '2099-01-01T08:30:00.000Z'
+  const definition = createDefinition({
+    id: 'automation-ahead-snapshot',
+    name: 'Ahead snapshot',
+    prompt: 'Inspect one bounded condition.',
+    schedule: { kind: 'once', at, timeZone: 'UTC' },
+    workspaceId: 'workspace-1',
+    cwd: '/workspace/repo',
+    agentPreset: 'standard',
+    createdBy: { kind: 'web', sessionId: scope.sessionId },
+    now: '2026-09-03T00:00:00.000Z',
+  })
+  const fulfilled = {
+    ...createManualRun(definition, '2026-09-03T00:30:00.000Z', 'ahead'),
+    replacesScheduledFor: at,
+    status: 'succeeded' as const,
+    finishedAt: '2026-09-03T01:00:00.000Z',
+    sessionId: null,
+  }
+  const untouched = createDefinition({
+    id: 'automation-plain-snapshot',
+    name: 'Plain snapshot',
+    prompt: 'Inspect one bounded condition.',
+    schedule: { kind: 'once', at, timeZone: 'UTC' },
+    workspaceId: 'workspace-1',
+    cwd: '/workspace/repo',
+    agentPreset: 'standard',
+    createdBy: { kind: 'web', sessionId: scope.sessionId },
+    now: '2026-09-03T00:00:00.000Z',
+  })
+  const { service } = await harness({
+    definitions: [definition, untouched],
+    runs: [fulfilled],
+  })
+  try {
+    const snapshot = await service.snapshot(scope)
+    const fulfilledView = snapshot.definitions.find(item => item.id === definition.id)
+    const untouchedView = snapshot.definitions.find(item => item.id === untouched.id)
+    assert.equal(fulfilledView?.nextRunAt, null)
+    assert.equal(fulfilledView?.lastRun?.status, 'succeeded')
+    assert.equal(untouchedView?.nextRunAt, at)
+  } finally {
+    await service.dispose()
+  }
+})
+
+test('running a daily task ahead today leaves tomorrow\'s occurrence intact', async (context) => {
+  const now = Date.parse('2026-08-13T07:30:00Z')
+  context.mock.timers.enable({ apis: ['Date', 'setTimeout'], now })
+  const { service, domain } = await harness({ config: { maxConcurrentRuns: 1 }, completeRuns: true })
+  const definition = await service.create(scope, {
+    name: 'Daily ahead',
+    prompt: 'Inspect one bounded condition.',
+    schedule: { kind: 'daily', time: '09:00', timeZone: 'UTC' },
+  })
+  const manual = await service.runNow(scope, definition.id, { replaceNext: true })
+  // Replaces today's 09:00, not tomorrow's.
+  assert.equal(manual.replacesScheduledFor, '2026-08-13T09:00:00.000Z')
+
+  service.start()
+  await flushMicrotasks(150)
+  assert.equal([...domain.runs.records.values()][0]?.status, 'succeeded')
+  // Today's 09:00 passes and is suppressed by the succeeded ahead run...
+  context.mock.timers.tick(90 * 60_000 + 1)
+  await flushMicrotasks(150)
+  assert.equal([...domain.runs.records.values()].length, 1)
+  // ...while tomorrow's 09:00 still fires normally (stub agent is single-use,
+  // so only its creation is asserted, not its final state).
+  context.mock.timers.tick(24 * 60 * 60_000)
+  await flushMicrotasks(150)
+  const runs = [...domain.runs.records.values()]
+  const tomorrowRun = runs.find(run => run.trigger === 'schedule')
+  assert.equal(runs.length, 2)
+  assert.equal(tomorrowRun?.scheduledFor, '2026-08-14T09:00:00.000Z')
+  await service.dispose()
+})

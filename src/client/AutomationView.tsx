@@ -11,11 +11,13 @@ import {
   clearDraft,
   countAutomationsByStatusOnDay,
   countAutomationsOnDay,
+  countExecutedOnDay,
   defaultFormState,
   deriveOverview,
   formatSchedule,
   formatRelativeTime,
   formStateFromAutomation,
+  isFulfilledAutomation,
   isSameLocalDay,
   modelRouteChoices,
   plannedNextRun,
@@ -998,6 +1000,7 @@ interface AutomationCardProps {
 function AutomationCard(props: AutomationCardProps): JSX.Element {
   const { automation, now, t, busyKey, confirmingDelete, onConfirmDelete, onEdit, onMutate, onRun } = props
   const isBusy = busyKey?.endsWith(`:${automation.id}`) === true
+  const fulfilled = isFulfilledAutomation(automation)
   return (
     <article className="dsh-automation-card">
       <div className="dsh-automation-card-top">
@@ -1006,7 +1009,14 @@ function AutomationCard(props: AutomationCardProps): JSX.Element {
           <div>
             <h3>{automation.name}</h3>
             <div className="dsh-automation-card-badges">
-              <AutomationStatusBadge status={automation.status} t={t} />
+              {fulfilled ? (
+                <span className="dsh-automation-badge dsh-automation-badge--executed">
+                  <span className="dsh-automation-status-dot" />
+                  {t('card.executed')}
+                </span>
+              ) : (
+                <AutomationStatusBadge status={automation.status} t={t} />
+              )}
               <span className="dsh-automation-permission-badge"><ShieldIcon />{t(`card.permission.${automation.permission}`)}</span>
               <span className="dsh-automation-model-badge">
                 {automation.provider === null || automation.model === null
@@ -1040,13 +1050,15 @@ function AutomationCard(props: AutomationCardProps): JSX.Element {
             ? t('card.nextRunPaused')
             : automation.nextRunAt !== undefined
               ? formatRelativeTime(automation.nextRunAt, now, t)
-              : '—'}</dd>
+              : fulfilled
+                ? <><span className="dsh-automation-mini-dot" />{t('card.executed')}</>
+                : '—'}</dd>
         </div>
         <div>
           <dt>{t('card.lastRun')}</dt>
           <dd>{automation.lastRunAt === undefined
             ? t('card.never')
-            : <><span className={`dsh-automation-mini-dot dsh-automation-mini-dot--${automation.lastRunStatus ?? 'succeeded'}`} />{formatRelativeTime(automation.lastRunAt, now, t)}</>}</dd>
+            : <><span className={`dsh-automation-mini-dot${fulfilled ? '' : ` dsh-automation-mini-dot--${automation.lastRunStatus ?? 'succeeded'}`}`} />{formatRelativeTime(automation.lastRunAt, now, t)}</>}</dd>
         </div>
       </dl>
 
@@ -1064,12 +1076,14 @@ function AutomationCard(props: AutomationCardProps): JSX.Element {
             <PencilIcon />{t('card.edit')}
           </button>
           <button className="dsh-automation-button dsh-automation-button--ghost" type="button" onClick={(event) => onRun(automation, event.currentTarget.getBoundingClientRect())} disabled={isBusy}>
-            <PlayIcon />{t('card.runNow')}
+            <PlayIcon />{t(automation.lastRunAt === undefined ? 'card.runNow' : 'card.runAgain')}
           </button>
-          <button className="dsh-automation-button dsh-automation-button--ghost" type="button" onClick={() => onMutate(automation.id, automation.status === 'active' ? 'pause' : 'resume')} disabled={isBusy}>
-            {automation.status === 'active' ? <PauseIcon /> : <PlayIcon />}
-            {t(automation.status === 'active' ? 'card.pause' : 'card.resume')}
-          </button>
+          {!fulfilled && (
+            <button className="dsh-automation-button dsh-automation-button--ghost" type="button" onClick={() => onMutate(automation.id, automation.status === 'active' ? 'pause' : 'resume')} disabled={isBusy}>
+              {automation.status === 'active' ? <PauseIcon /> : <PlayIcon />}
+              {t(automation.status === 'active' ? 'card.pause' : 'card.resume')}
+            </button>
+          )}
           <button className="dsh-automation-icon-button" type="button" aria-label={t('card.delete')} title={t('card.delete')} onClick={() => onConfirmDelete(automation.id)} disabled={isBusy}>
             <TrashIcon />
           </button>
@@ -1259,13 +1273,39 @@ export function AutomationView({
         ?? (automation.status === 'paused' ? plannedNextRun(automation.schedule, automation.createdAt, now) : undefined)
       return next === undefined ? automation : { ...automation, nextRunAt: next }
     })
+    // All tasks stay in the list; fulfilled one-shots sort to the bottom
+    // (no next run) and are marked as executed, not removed.
     return sortAutomations(normalized, sortKey, sortDirection)
   }, [snapshot, now, sortDirection, sortKey])
+  // Fulfilled one-shots: succeeded and no pending schedule left. They stay
+  // visible but are excluded from the pending counts.
+  const doneCount = useMemo(() => (
+    snapshot === undefined ? 0 : snapshot.automations.filter(isFulfilledAutomation).length
+  ), [snapshot])
   const todayStart = useMemo(() => startOfLocalDay(now), [now])
-  const todayAutomations = useMemo(() => (
-    automations.filter(automation => automation.nextRunAt !== undefined
-      && isSameLocalDay(new Date(automation.nextRunAt), todayStart))
-  ), [automations, todayStart])
+  // One day's task list: runs pending that day, then tasks finished that day
+  // (marked executed). Mirrors the Today view for any picked calendar day.
+  const buildDayList = (day: Date): AutomationViewModel[] => {
+    const onDay = (iso: string | undefined): boolean => (
+      iso !== undefined && isSameLocalDay(new Date(iso), day)
+    )
+    const pending = automations.filter(automation => onDay(automation.nextRunAt))
+    const finished = automations
+      .filter(automation => isFulfilledAutomation(automation) && onDay(automation.lastRunAt))
+      .sort((left, right) => String(right.lastRunAt ?? '').localeCompare(String(left.lastRunAt ?? '')))
+    return [...sortAutomations(pending, sortKey, sortDirection), ...finished]
+  }
+  const todayAutomations = useMemo(
+    () => buildDayList(todayStart),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [automations, sortDirection, sortKey, todayStart],
+  )
+  const todayPendingCount = useMemo(() => {
+    const isOnToday = (iso: string | undefined): boolean => (
+      iso !== undefined && isSameLocalDay(new Date(iso), todayStart)
+    )
+    return automations.filter(automation => isOnToday(automation.nextRunAt)).length
+  }, [automations, todayStart])
   const calendarAnchor = calendarCursor ?? startOfLocalWeek(todayStart)
   const pickedDate = selectedDate ?? todayStart
   const weekDays = useMemo(() => buildWeekCalendarDays(calendarAnchor), [calendarAnchor])
@@ -1273,13 +1313,26 @@ export function AutomationView({
   const calendarTitleDate = rangeView === 'week' ? weekDays[3] ?? calendarAnchor : calendarAnchor
   const calendarTitleYear = calendarTitleDate.getFullYear()
   const calendarTitleMonth = calendarTitleDate.getMonth() + 1
+  const dayAutomations = useMemo(
+    () => buildDayList(pickedDate),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [automations, pickedDate, sortDirection, sortKey],
+  )
   const visibleAutomations = useMemo(() => {
     if (taskView === 'today') return todayAutomations
     if (rangeView === 'list') return automations
-    return automations.filter(automation => automation.nextRunAt !== undefined
-      && isSameLocalDay(new Date(automation.nextRunAt), pickedDate))
-  }, [automations, pickedDate, rangeView, taskView, todayAutomations])
-  const automationIdSet = useMemo(() => new Set(automations.map(item => item.id)), [automations])
+    return dayAutomations
+  }, [dayAutomations, rangeView, taskView, todayAutomations])
+  // Executed cards stay in the view but render below the create button.
+  const visiblePending = useMemo(() => (
+    visibleAutomations.filter(automation => !isFulfilledAutomation(automation))
+  ), [visibleAutomations])
+  const visibleExecuted = useMemo(() => (
+    visibleAutomations.filter(isFulfilledAutomation)
+  ), [visibleAutomations])
+  const automationIdSet = useMemo(() => (
+    new Set((snapshot?.automations ?? []).map(item => item.id))
+  ), [snapshot])
 
   const selectRange = (range: CalendarRangeView): void => {
     setRangeView(range)
@@ -1604,10 +1657,10 @@ export function AutomationView({
             <div className="dsh-automation-toolbar-row">
               <div className="dsh-automation-view-switch" role="group">
                 <button type="button" className={taskView === 'today' ? 'is-selected' : ''} aria-pressed={taskView === 'today'} onClick={() => setTaskView('today')}>
-                  <span>{t('view.todayTasks')}</span><b>{todayAutomations.length}</b>
+                  <span>{t('view.todayTasks')}</span><b>{todayPendingCount}</b>
                 </button>
                 <button type="button" className={taskView === 'all' ? 'is-selected' : ''} aria-pressed={taskView === 'all'} onClick={() => setTaskView('all')}>
-                  <span>{t('view.allTasks')}</span><b>{automations.length}</b>
+                  <span>{t('view.allTasks')}</span><b>{Math.max(0, automations.length - doneCount)}</b>
                 </button>
               </div>
               <div className="dsh-automation-status-summary">
@@ -1670,6 +1723,7 @@ export function AutomationView({
                     <div className="dsh-automation-cal-week">
                       {weekDays.map(day => {
                         const counts = countAutomationsByStatusOnDay(automations, day)
+                        const executed = countExecutedOnDay(automations, day)
                         const weekday = day.getDay() === 0 ? 7 : day.getDay()
                         return (
                           <button key={day.toISOString()} type="button" className={`dsh-automation-cal-day${isSameLocalDay(day, todayStart) ? ' is-today' : ''}${isSameLocalDay(day, pickedDate) ? ' is-selected' : ''}`} onClick={() => selectDay(day)}>
@@ -1677,6 +1731,7 @@ export function AutomationView({
                             <span className="dsh-automation-cal-date">{day.getMonth() + 1}/{day.getDate()}</span>
                             {counts.active > 0 && <span className="dsh-automation-cal-count">{t('calendar.taskCount', { count: counts.active })}</span>}
                             {counts.paused > 0 && <span className="dsh-automation-cal-count dsh-automation-cal-count--paused">{t('calendar.pausedCount', { count: counts.paused })}</span>}
+                            {executed > 0 && <span className="dsh-automation-cal-count dsh-automation-cal-count--executed">{t('calendar.executedCount', { count: executed })}</span>}
                           </button>
                         )
                       })}
@@ -1691,12 +1746,14 @@ export function AutomationView({
                       <div className="dsh-automation-cal-month-grid">
                         {monthDays.map(day => {
                           const counts = countAutomationsByStatusOnDay(automations, day)
+                          const executed = countExecutedOnDay(automations, day)
                           const otherMonth = day.getMonth() !== calendarAnchor.getMonth()
                           return (
                             <button key={day.toISOString()} type="button" className={`dsh-automation-cal-month-day${otherMonth ? ' is-other' : ''}${isSameLocalDay(day, todayStart) ? ' is-today' : ''}${isSameLocalDay(day, pickedDate) ? ' is-selected' : ''}`} onClick={() => selectDay(day)}>
                               <span className="dsh-automation-cal-month-date">{day.getDate()}</span>
                               {counts.active > 0 && <span className="dsh-automation-cal-count">{t('calendar.taskCount', { count: counts.active })}</span>}
                               {counts.paused > 0 && <span className="dsh-automation-cal-count dsh-automation-cal-count--paused">{t('calendar.pausedCount', { count: counts.paused })}</span>}
+                              {executed > 0 && <span className="dsh-automation-cal-count dsh-automation-cal-count--executed">{t('calendar.executedCount', { count: executed })}</span>}
                             </button>
                           )
                         })}
@@ -1722,8 +1779,35 @@ export function AutomationView({
               <button className="dsh-automation-button dsh-automation-button--primary" type="button" onClick={openCreate}>{showCreate ? <><PauseIcon />{t('header.closeCreate')}</> : <><PlusIcon />{t('header.create')}</>}</button>
             </div>
           ) : (
+            visiblePending.length > 0 && (
+              <div className="dsh-automation-card-list">
+                {visiblePending.map(automation => (
+                  <AutomationCard
+                    key={automation.id}
+                    automation={automation}
+                    now={now}
+                    t={t}
+                    busyKey={busyKey}
+                    confirmingDelete={confirmDeleteId === automation.id}
+                    onConfirmDelete={setConfirmDeleteId}
+                    onEdit={onEdit}
+                    onMutate={onMutate}
+                    onRun={onRun}
+                  />
+                ))}
+              </div>
+            )
+          )}
+
+          {visibleAutomations.length > 0 && (
+            <div className="dsh-automation-empty dsh-automation-empty--footer">
+              <button className="dsh-automation-button dsh-automation-button--primary" type="button" onClick={openCreate}>{showCreate ? <><PauseIcon />{t('header.closeCreate')}</> : <><PlusIcon />{t('header.create')}</>}</button>
+            </div>
+          )}
+
+          {visibleExecuted.length > 0 && (
             <div className="dsh-automation-card-list">
-              {visibleAutomations.map(automation => (
+              {visibleExecuted.map(automation => (
                 <AutomationCard
                   key={automation.id}
                   automation={automation}
@@ -1737,12 +1821,6 @@ export function AutomationView({
                   onRun={onRun}
                 />
               ))}
-            </div>
-          )}
-
-          {visibleAutomations.length > 0 && (
-            <div className="dsh-automation-empty dsh-automation-empty--footer">
-              <button className="dsh-automation-button dsh-automation-button--primary" type="button" onClick={openCreate}>{showCreate ? <><PauseIcon />{t('header.closeCreate')}</> : <><PlusIcon />{t('header.create')}</>}</button>
             </div>
           )}
         </section>

@@ -70,6 +70,7 @@ export declare const en: {
     readonly 'calendar.month': "Month";
     readonly 'calendar.taskCount': "{count} tasks";
     readonly 'calendar.pausedCount': "{count} paused";
+    readonly 'calendar.executedCount': "{count} executed";
     readonly 'calendar.dow.1': "Mon";
     readonly 'calendar.dow.2': "Tue";
     readonly 'calendar.dow.3': "Wed";
@@ -181,6 +182,8 @@ export declare const en: {
     readonly 'card.pause': "Pause";
     readonly 'card.resume': "Resume";
     readonly 'card.runNow': "Run now";
+    readonly 'card.runAgain': "Run again";
+    readonly 'card.executed': "Executed";
     readonly 'card.edit': "Edit";
     readonly 'card.viewPrompt': "View complete prompt";
     readonly 'card.delete': "Delete";

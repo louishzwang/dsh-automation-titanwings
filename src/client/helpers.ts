@@ -439,6 +439,28 @@ export function deriveOverview(snapshot: AutomationSnapshot): OverviewStats {
   }
 }
 
+/** 已完成的一次性任务：仍启用、最近一次成功执行、且没有待执行的后续计划。 */
+export function isFulfilledAutomation(automation: AutomationViewModel): boolean {
+  return automation.status === 'active'
+    && automation.nextRunAt === undefined
+    && automation.lastRunStatus === 'succeeded'
+}
+
+/** 统计某个本地日期当天完成（lastRunAt 落在此日）的已执行任务数。 */
+export function countExecutedOnDay(
+  automations: readonly AutomationViewModel[],
+  day: Date,
+): number {
+  let count = 0
+  for (const automation of automations) {
+    if (!isFulfilledAutomation(automation)) continue
+    if (automation.lastRunAt !== undefined && isSameLocalDay(new Date(automation.lastRunAt), day)) {
+      count += 1
+    }
+  }
+  return count
+}
+
 export function formatRelativeTime(iso: string, now: Date, t: Translate): string {
   const value = Date.parse(iso)
   if (!Number.isFinite(value)) return iso

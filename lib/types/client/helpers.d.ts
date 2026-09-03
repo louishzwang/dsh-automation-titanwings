@@ -75,6 +75,10 @@ export declare function buildWeekCalendarDays(cursor: Date): readonly Date[];
 /** 生成月视图的 6x7 日期网格，覆盖该月所在的所有周。 */
 export declare function buildMonthCalendarGrid(cursor: Date): readonly Date[];
 export declare function deriveOverview(snapshot: AutomationSnapshot): OverviewStats;
+/** 已完成的一次性任务：仍启用、最近一次成功执行、且没有待执行的后续计划。 */
+export declare function isFulfilledAutomation(automation: AutomationViewModel): boolean;
+/** 统计某个本地日期当天完成（lastRunAt 落在此日）的已执行任务数。 */
+export declare function countExecutedOnDay(automations: readonly AutomationViewModel[], day: Date): number;
 export declare function formatRelativeTime(iso: string, now: Date, t: Translate): string;
 export declare function shortSessionId(sessionId: string): string;
 export declare function formatSchedule(schedule: AutomationSchedule, t: Translate): string;

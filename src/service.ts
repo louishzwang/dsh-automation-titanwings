@@ -233,11 +233,23 @@ export class AutomationService {
       return {
         generatedAt,
         workspace: resolved.workspace,
-        definitions: definitions.map((definition) => ({
-          ...definition,
-          nextRunAt: nextOccurrence(definition.schedule, generatedAt),
-          lastRun: workspaceRuns.find(run => run.automationId === definition.id) ?? null,
-        })),
+        definitions: definitions.map((definition) => {
+          const related = workspaceRuns.filter(run => run.automationId === definition.id)
+          // Occurrences already fulfilled by a succeeded "run ahead"/launch run
+          // are not pending: skip them when deriving the next run time.
+          let nextRunAt: string | null = nextOccurrence(definition.schedule, generatedAt)
+          while (nextRunAt !== null && related.some(run => (
+            run.status === 'succeeded' && run.replacesScheduledFor === nextRunAt
+          ))) {
+            nextRunAt = nextOccurrence(definition.schedule, nextRunAt)
+          }
+          return {
+            ...definition,
+            nextRunAt,
+            // workspaceRuns is sorted newest-first, so the first match is the latest run.
+            lastRun: related[0] ?? null,
+          }
+        }),
         runs,
       }
     }, signal)
