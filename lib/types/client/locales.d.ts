@@ -17,6 +17,7 @@ export declare const en: {
     readonly 'stats.attention': "Needs action";
     readonly 'stats.currentStatus': "Current status:";
     readonly 'stats.paused': "Paused";
+    readonly 'stats.executed': "Executed";
     readonly 'stats.noneScheduled': "Not scheduled";
     readonly 'stats.noAttention': "All clear";
     readonly 'section.automations': "Workspace automations";

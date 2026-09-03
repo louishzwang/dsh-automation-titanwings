@@ -54,7 +54,7 @@ test('overview labels distinguish enabled definitions from running executions', 
   assert.equal(zh['stats.noAttention'], '一切正常')
   assert.equal(zh['stats.currentStatus'], '当前状态：')
   assert.equal(en['stats.active'], 'Active')
-  assert.equal(zh['stats.active'], '启用')
+  assert.equal(zh['stats.active'], '已启用')
   assert.notEqual(zh['stats.active'], zh['status.running'])
 })
 

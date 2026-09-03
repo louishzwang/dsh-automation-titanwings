@@ -1287,6 +1287,13 @@ export function AutomationView({
   const doneCount = useMemo(() => (
     snapshot === undefined ? 0 : snapshot.automations.filter(isFulfilledAutomation).length
   ), [snapshot])
+  // 启用只统计仍待执行的任务：已执行的一次性任务不再计入启用。
+  const activeCount = useMemo(() => (
+    automations.filter(item => item.status === 'active' && !isFulfilledAutomation(item)).length
+  ), [automations])
+  const pausedCount = useMemo(() => (
+    automations.filter(item => item.status === 'paused').length
+  ), [automations])
   const todayStart = useMemo(() => startOfLocalDay(now), [now])
   // One day's task list: runs pending that day, then tasks finished that day
   // (marked executed). Mirrors the Today view for any picked calendar day.
@@ -1672,9 +1679,14 @@ export function AutomationView({
                 </button>
               </div>
               <div className="dsh-automation-status-summary">
-                <span><b>{t('stats.active')}</b>{stats?.active ?? 0}</span>
-                <span><b>{t('stats.paused')}</b>{(stats?.total ?? 0) - (stats?.active ?? 0)}</span>
-                <span><b>{t('stats.next')}</b>{stats?.nextRunAt === undefined ? t('stats.noneScheduled') : formatRelativeTime(stats.nextRunAt, now, t)}</span>
+                <div className="dsh-automation-status-column">
+                  <span className="dsh-automation-status-item"><b>{t('stats.active')}</b><em>{activeCount}</em></span>
+                  <span className="dsh-automation-status-item"><b>{t('stats.paused')}</b><em>{pausedCount}</em></span>
+                </div>
+                <div className="dsh-automation-status-column">
+                  <span className="dsh-automation-status-item"><b>{t('stats.executed')}</b><em>{doneCount}</em></span>
+                  <span className="dsh-automation-status-item"><b>{t('stats.next')}</b><em>{stats?.nextRunAt === undefined ? t('stats.noneScheduled') : formatRelativeTime(stats.nextRunAt, now, t)}</em></span>
+                </div>
               </div>
               <div className="dsh-automation-toolbar-actions">
                 <button className="dsh-automation-button dsh-automation-button--primary" type="button" onClick={toggleCreate}>
