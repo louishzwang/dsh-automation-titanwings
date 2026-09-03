@@ -132,6 +132,7 @@ function timeZoneChoices(current: string): readonly { readonly value: string; re
 const SORT_STORAGE: SortPreferenceStorage | undefined = resolveSortPreferenceStorage(
   typeof window === 'undefined' ? undefined : window,
 )
+const WORKSPACE_RANGE_DEFAULT_KEY = 'dsh-automation.range-default.workspace'
 
 type BusyAction = 'create' | 'update' | 'pause' | 'resume' | 'run' | 'read' | 'delete' | 'delete-run' | 'settings'
 type TaskView = 'today' | 'all'
@@ -1189,7 +1190,11 @@ export function AutomationView({
   const [sortKey, setSortKey] = useState<AutomationSortKey>(() => readSortDefault(SORT_STORAGE, WORKSPACE_SORT_DEFAULT_KEY)?.key ?? 'created')
   const [sortDirection, setSortDirection] = useState<AutomationSortDirection>(() => readSortDefault(SORT_STORAGE, WORKSPACE_SORT_DEFAULT_KEY)?.direction ?? 'desc')
   const [taskView, setTaskView] = useState<TaskView>('today')
-  const [rangeView, setRangeView] = useState<CalendarRangeView>('list')
+  const [rangeView, setRangeView] = useState<CalendarRangeView>(() => {
+    if (SORT_STORAGE === undefined) return 'week'
+    const raw = SORT_STORAGE.getItem(WORKSPACE_RANGE_DEFAULT_KEY)
+    return raw === 'week' || raw === 'month' || raw === 'list' ? raw : 'week'
+  })
   const [calendarCursor, setCalendarCursor] = useState<Date>()
   const [selectedDate, setSelectedDate] = useState<Date>()
   const [draft, setDraft] = useState<AutomationFormState | undefined>(undefined)
@@ -1336,6 +1341,9 @@ export function AutomationView({
 
   const selectRange = (range: CalendarRangeView): void => {
     setRangeView(range)
+    if (SORT_STORAGE !== undefined) {
+      try { SORT_STORAGE.setItem(WORKSPACE_RANGE_DEFAULT_KEY, range) } catch { /* best effort */ }
+    }
     if (range === 'week') setCalendarCursor(startOfLocalWeek(pickedDate))
     if (range === 'month') setCalendarCursor(new Date(pickedDate.getFullYear(), pickedDate.getMonth(), 1))
   }
@@ -1679,7 +1687,7 @@ export function AutomationView({
               <div className="dsh-automation-toolbar-controls">
               {taskView === 'all' && (
                 <div className="dsh-automation-range-switch" role="group" aria-label={t('view.allTasks')}>
-                  {(['list', 'week', 'month'] as const).map(range => (
+                  {(['week', 'month', 'list'] as const).map(range => (
                     <button key={range} type="button" className={rangeView === range ? 'is-selected' : ''} aria-pressed={rangeView === range} onClick={() => selectRange(range)}>
                       {t(`view.${range}`)}
                     </button>

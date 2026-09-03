@@ -59,7 +59,7 @@ export declare const en: {
     readonly 'section.refresh': "Refresh";
     readonly 'view.todayTasks': "Today";
     readonly 'view.allTasks': "All tasks";
-    readonly 'view.list': "List";
+    readonly 'view.list': "Overview";
     readonly 'view.week': "Week";
     readonly 'view.month': "Month";
     readonly 'view.today': "Today";
