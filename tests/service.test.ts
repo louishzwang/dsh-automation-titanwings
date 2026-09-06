@@ -1293,3 +1293,97 @@ test('running a daily task ahead today leaves tomorrow\'s occurrence intact', as
   assert.equal(tomorrowRun?.scheduledFor, '2026-08-14T09:00:00.000Z')
   await service.dispose()
 })
+
+
+test('deleting scheduled history preserves receipts across reopen and definition edits', async (context) => {
+  context.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.parse('2026-08-13T09:01:00Z') })
+  const d = storedDefinition('2026-08-10T00:00:00Z')
+  const r = { ...createScheduledRun(d, '2026-08-13T09:00:00.000Z'), status: 'succeeded' as const }
+  const h = await harness({ definitions: [d], runs: [r], config: { catchUpMissedRuns: true } })
+  await h.service.deleteRun(scope, r.id)
+  assert.equal(h.domain.runs.size, 0)
+  const saved = h.domain.definitions.get(d.id)!
+  assert.equal(saved.revision, d.revision)
+  assert.equal(saved.updatedAt, d.updatedAt)
+  assert.equal(saved.scheduleHandledThrough, r.scheduledFor)
+  await h.service.dispose()
+  const reopened = await harness({ definitions: [saved], config: { catchUpMissedRuns: true } })
+  await reopened.service.update(scope, d.id, { name: 'Renamed' })
+  reopened.service.start()
+  await flushMicrotasks(100)
+  assert.equal(reopened.domain.runs.size, 0)
+  await reopened.service.dispose()
+})
+
+test('history pruning retains scheduled receipts even when newer manual runs fill retention', async (context) => {
+  context.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.parse('2026-08-13T09:05:00Z') })
+  const d = storedDefinition('2026-08-10T00:00:00Z')
+  const scheduled = { ...createScheduledRun(d, '2026-08-13T09:00:00.000Z'), status: 'succeeded' as const }
+  const manual = { ...createManualRun(d, '2026-08-13T09:04:00.000Z'), status: 'succeeded' as const }
+  const h = await harness({ definitions: [d], runs: [scheduled, manual], config: { historyLimit: 1 } })
+  assert.equal(h.domain.runs.size, 1)
+  h.service.start()
+  await flushMicrotasks(100)
+  assert.equal(h.domain.runs.size, 1)
+  assert.equal(h.domain.definitions.get(d.id)?.scheduleHandledThrough, scheduled.scheduledFor)
+  await h.service.dispose()
+})
+
+test('repeated run-ahead follows the displayed pending date after receipt deletion', async (context) => {
+  context.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.parse('2026-08-13T08:00:00Z') })
+  const d = storedDefinition('2026-08-13T00:00:00Z')
+  const first = { ...createManualRun(d, '2026-08-13T07:00:00.000Z', 'first', '2026-08-13T09:00:00.000Z'), status: 'succeeded' as const }
+  const h = await harness({ definitions: [d], runs: [first] })
+  await h.service.deleteRun(scope, first.id)
+  const next = (await h.service.snapshot(scope)).definitions[0]?.nextRunAt
+  assert.equal(next, '2026-08-14T09:00:00.000Z')
+  const second = await h.service.runNow(scope, d.id, { replaceNext: true })
+  assert.equal(second.replacesScheduledFor, next)
+  await h.service.dispose()
+})
+
+test('failed ahead deletion never suppresses a future occurrence', async () => {
+  const d = storedDefinition('2026-08-13T00:00:00Z')
+  const failed = { ...createManualRun(d, '2026-08-13T07:00:00.000Z', 'failed', '2099-01-01T09:00:00.000Z'), status: 'failed' as const }
+  const h = await harness({ definitions: [d], runs: [failed] })
+  await h.service.deleteRun(scope, failed.id)
+  assert.equal(h.domain.definitions.get(d.id)?.retiredReplacements, undefined)
+  await h.service.dispose()
+})
+
+test('a failed receipt write keeps the original history record', async () => {
+  const d = storedDefinition('2026-08-10T00:00:00Z')
+  const r = { ...createScheduledRun(d, '2026-08-13T09:00:00.000Z'), status: 'succeeded' as const }
+  const h = await harness({ definitions: [d], runs: [r] })
+  h.domain.definitions.put = async () => { throw new Error('simulated receipt write failure') }
+  await assert.rejects(h.service.deleteRun(scope, r.id), /receipt write failure/)
+  assert.equal(h.domain.runs.get(r.id), r)
+  await h.service.dispose()
+})
+
+test('zero replay wait records missed work and includes an exactly due occurrence', async (context) => {
+  context.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.parse('2026-08-13T09:00:00Z') })
+  const exact = storedDefinition('2026-08-13T00:00:00Z')
+  const stale = createDefinition({ ...storedDefinition('2026-08-12T00:00:00Z'), id: 'stale', schedule: { kind: 'daily', time: '08:59', timeZone: 'UTC' }, now: '2026-08-12T00:00:00Z' })
+  const h = await harness({ definitions: [exact, stale], config: { catchUpMissedRuns: true, misfireGraceMs: 0 } })
+  h.service.start()
+  await flushMicrotasks(150)
+  assert.equal([...h.domain.runs.records.values()].find(r => r.automationId === exact.id)?.status, 'queued')
+  assert.equal([...h.domain.runs.records.values()].find(r => r.automationId === stale.id)?.status, 'skipped')
+  await h.service.dispose()
+})
+
+test('saving replay policy wakes the scheduler without another task mutation', async (context) => {
+  context.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.parse('2026-08-13T08:00:00Z') })
+  const d = storedDefinition('2026-08-13T00:00:00Z')
+  const h = await harness({ definitions: [d] })
+  let policy = { catchUpMissedRuns: false, catchUpMissedRunsMax: 1, misfireGraceMinutes: 15 }
+  h.service.attachSettings({ get: () => policy, update: async next => { policy = next } })
+  h.service.start()
+  await flushMicrotasks(60)
+  context.mock.timers.setTime(Date.parse('2026-08-13T09:01:00Z'))
+  await h.service.updateSettings(scope, { ...policy, catchUpMissedRuns: true })
+  await flushMicrotasks(120)
+  assert.equal([...h.domain.runs.records.values()][0]?.status, 'queued')
+  await h.service.dispose()
+})

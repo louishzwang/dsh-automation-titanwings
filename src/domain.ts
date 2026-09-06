@@ -77,6 +77,8 @@ export const automationDefinitionSchema: z.ZodType<AutomationDefinition> = z.obj
   createdBy: creator,
   createdAt: instant,
   updatedAt: instant,
+  scheduleHandledThrough: instant.optional(),
+  retiredReplacements: z.array(instant).optional(),
 }).superRefine((value, ctx) => {
   try {
     if (value.timeZone !== value.schedule.timeZone) {

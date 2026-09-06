@@ -70,6 +70,9 @@ export interface AutomationDefinition {
   readonly createdBy: AutomationCreator
   readonly createdAt: string
   readonly updatedAt: string
+  /** Execution receipts survive history deletion; absent in legacy definitions. */
+  readonly scheduleHandledThrough?: string | undefined
+  readonly retiredReplacements?: readonly string[] | undefined
 }
 
 export interface AutomationTargetSnapshot {

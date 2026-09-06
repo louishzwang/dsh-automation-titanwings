@@ -149,7 +149,7 @@ export class AutomationService {
 
   /** Persist a new host-wide policy through the settings namespace. */
   async updateSettings(scope: AutomationScope, next: AutomationSettings, signal?: AbortSignal): Promise<AutomationSettings> {
-    return this.serialize(async () => {
+    const settings = await this.serialize(async () => {
       await this.resolveScope(scope)
       throwIfCancelled(signal)
       const owner = this.settingsOwner
@@ -157,6 +157,8 @@ export class AutomationService {
       await owner.update(next)
       return owner.get()
     }, signal)
+    this.requestPump()
+    return settings
   }
 
   static async open(ctx: Context, config: AutomationConfig): Promise<AutomationService> {
@@ -237,12 +239,7 @@ export class AutomationService {
           const related = workspaceRuns.filter(run => run.automationId === definition.id)
           // Occurrences already fulfilled by a succeeded "run ahead"/launch run
           // are not pending: skip them when deriving the next run time.
-          let nextRunAt: string | null = nextOccurrence(definition.schedule, generatedAt)
-          while (nextRunAt !== null && related.some(run => (
-            run.status === 'succeeded' && run.replacesScheduledFor === nextRunAt
-          ))) {
-            nextRunAt = nextOccurrence(definition.schedule, nextRunAt)
-          }
+          const nextRunAt = this.nextPendingOccurrence(definition, related, generatedAt)
           return {
             ...definition,
             nextRunAt,
@@ -364,7 +361,8 @@ export class AutomationService {
     const run = await this.serialize(async () => {
       const definition = await this.ownedDefinition(scope, id)
       throwIfCancelled(signal)
-      const alreadyActive = [...this.runs.entries()].some(([, candidate]) => (
+      const related = this.relatedRuns(id)
+      const alreadyActive = related.some(candidate => (
         candidate.automationId === id
         && (candidate.status === 'queued' || candidate.status === 'running')
       ))
@@ -374,7 +372,7 @@ export class AutomationService {
       // occurrence. Once it succeeds that occurrence is treated as handled.
       // Without a future occurrence the manual run is a plain one-off.
       const replacesScheduledFor = options.replaceNext === true
-        ? nextOccurrence(definition.schedule, now)
+        ? this.nextPendingOccurrence(definition, related, now)
         : null
       const value = createManualRun(definition, now, undefined, replacesScheduledFor)
       await this.runs.put(value.id, value)
@@ -433,6 +431,7 @@ export class AutomationService {
       if (run.status === 'queued' || run.status === 'running') {
         throw new Error('The automation run is still queued or running.')
       }
+      await this.retainOccurrenceReceipts([run])
       return this.runs.delete(runId)
     }, signal)
     return { id: runId, deleted }
@@ -503,8 +502,10 @@ export class AutomationService {
     if (scheduledFor === null || Date.parse(scheduledFor) <= Date.parse(definition.updatedAt)) return
     const related = [...this.runs.entries()].map(([, run]) => run)
       .filter(run => run.automationId === definition.id)
+    if (definition.scheduleHandledThrough !== undefined
+      && Date.parse(scheduledFor) <= Date.parse(definition.scheduleHandledThrough)) return
     if (related.some(run => run.trigger === 'schedule' && run.scheduledFor === scheduledFor)) return
-    if (this.isReplacedByManualRun(related, scheduledFor)) return
+    if (this.isReplacedByManualRun(definition, related, scheduledFor)) return
     const candidate = createScheduledRun(definition, scheduledFor)
     if (this.runs.get(candidate.id) !== undefined) return
     const overlapping = related.some(run => run.status === 'queued' || run.status === 'running')
@@ -550,10 +551,10 @@ export class AutomationService {
     const handledThrough = related
       .filter(run => run.trigger === 'schedule')
       .map(run => Date.parse(run.scheduledFor))
-      .reduce((latest, candidate) => Math.max(latest, candidate), Number.NEGATIVE_INFINITY)
+      .reduce((latest, candidate) => Math.max(latest, candidate), definition.scheduleHandledThrough === undefined ? Number.NEGATIVE_INFINITY : Date.parse(definition.scheduleHandledThrough))
     const waitMs = this.settings().misfireGraceMinutes * 60_000
-    const sinceMs = Math.max(Date.parse(definition.createdAt), handledThrough, nowMs - waitMs)
-    if (sinceMs >= nowMs) return
+    // Include an occurrence exactly on the grace boundary (also when wait = 0).
+    const sinceMs = Math.max(Date.parse(definition.createdAt), handledThrough, nowMs - waitMs - 1)
     // Daily/weekly/once schedules produce at most one occurrence per day, so a
     // window-sized limit returns the full candidate list without truncating
     // the recent end; the backlog slice below then keeps the newest cap.
@@ -567,7 +568,7 @@ export class AutomationService {
     const backlog = candidates.slice(-this.settings().catchUpMissedRunsMax)
     for (const scheduledFor of backlog) {
       if (related.some(run => run.trigger === 'schedule' && run.scheduledFor === scheduledFor)) continue
-      if (this.isReplacedByManualRun(related, scheduledFor)) continue
+      if (this.isReplacedByManualRun(definition, related, scheduledFor)) continue
       const candidate = createScheduledRun(definition, scheduledFor)
       if (this.runs.get(candidate.id) !== undefined) continue
       await this.runs.put(candidate.id, candidate)
@@ -576,7 +577,7 @@ export class AutomationService {
     // replayed (most recent ones only), so the run history explains them and
     // the user can still run them manually.
     const staleSinceMs = Math.max(Date.parse(definition.createdAt), handledThrough)
-    const staleUntilMs = nowMs - waitMs
+    const staleUntilMs = nowMs - waitMs - 1
     if (staleUntilMs > staleSinceMs) {
       const staleDays = Math.ceil((staleUntilMs - staleSinceMs) / 86_400_000) + 2
       const stale = occurrencesBetween(
@@ -587,7 +588,7 @@ export class AutomationService {
       ).slice(-this.settings().catchUpMissedRunsMax)
       for (const scheduledFor of stale) {
         if (related.some(run => run.trigger === 'schedule' && run.scheduledFor === scheduledFor)) continue
-        if (this.isReplacedByManualRun(related, scheduledFor)) continue
+        if (this.isReplacedByManualRun(definition, related, scheduledFor)) continue
         const candidate = createScheduledRun(definition, scheduledFor)
         if (this.runs.get(candidate.id) !== undefined) continue
         await this.runs.put(candidate.id, {
@@ -599,18 +600,74 @@ export class AutomationService {
         })
       }
     }
+    await this.pruneWorkspaceHistory(definition.workspaceId)
   }
 
   /** A succeeded "run ahead" manual run counts as having handled its target occurrence. */
   private isReplacedByManualRun(
+    definition: AutomationDefinition,
     related: readonly AutomationRun[],
     scheduledFor: string,
   ): boolean {
-    return related.some(run => (
+    return definition.retiredReplacements?.includes(scheduledFor) === true || related.some(run => (
       run.trigger === 'manual'
       && run.status === 'succeeded'
       && run.replacesScheduledFor === scheduledFor
     ))
+  }
+
+
+  private relatedRuns(id: string): AutomationRun[] {
+    return [...this.runs.entries()].map(([, run]) => run).filter(run => run.automationId === id)
+  }
+
+  private nextPendingOccurrence(definition: AutomationDefinition, related: readonly AutomationRun[], after: string): string | null {
+    const boundary = definition.scheduleHandledThrough === undefined
+      ? after : toIso(Math.max(Date.parse(after), Date.parse(definition.scheduleHandledThrough)))
+    let next = nextOccurrence(definition.schedule, boundary)
+    const replaced = new Set(definition.retiredReplacements ?? [])
+    for (const run of related) {
+      if (run.trigger === 'manual' && run.status === 'succeeded' && run.replacesScheduledFor != null) {
+        replaced.add(run.replacesScheduledFor)
+      }
+    }
+    while (next !== null && replaced.has(next)) next = nextOccurrence(definition.schedule, next)
+    return next
+  }
+
+  /** Persist minimal receipts before removing facts. A failed write leaves history intact. */
+  private async retainOccurrenceReceipts(removed: readonly AutomationRun[]): Promise<void> {
+    const grouped = new Map<string, AutomationRun[]>()
+    for (const run of removed) {
+      const group = grouped.get(run.automationId) ?? []
+      group.push(run)
+      grouped.set(run.automationId, group)
+    }
+    for (const [id, runs] of grouped) {
+      const definition = this.definitions.get(id)
+      if (definition === undefined) continue
+      let through = definition.scheduleHandledThrough === undefined ? Number.NEGATIVE_INFINITY : Date.parse(definition.scheduleHandledThrough)
+      const replacements = new Set(definition.retiredReplacements ?? [])
+      for (const run of runs) {
+        if (run.trigger === 'schedule') through = Math.max(through, Date.parse(run.scheduledFor))
+        if (run.trigger === 'manual' && run.status === 'succeeded' && run.replacesScheduledFor != null) {
+          replacements.add(run.replacesScheduledFor)
+        }
+      }
+      const retained = [...replacements].filter(at => Date.parse(at) > through).sort()
+      if (through === (definition.scheduleHandledThrough === undefined ? Number.NEGATIVE_INFINITY : Date.parse(definition.scheduleHandledThrough))
+        && JSON.stringify(retained) === JSON.stringify(definition.retiredReplacements ?? [])) continue
+      await this.definitions.put(id, {
+        ...definition,
+        ...(Number.isFinite(through) ? { scheduleHandledThrough: toIso(through) } : {}),
+        retiredReplacements: retained,
+      })
+    }
+  }
+
+  /** Completion runs outside the admission queue; serialize checkpoint writes with edits. */
+  private async pruneAfterExecution(workspaceId: string): Promise<void> {
+    if (!this.stopping) await this.serialize(() => this.pruneWorkspaceHistory(workspaceId))
   }
 
   private async startQueuedRuns(): Promise<void> {
@@ -652,7 +709,7 @@ export class AutomationService {
             }
             await this.runs.put(run.id, failed)
             await this.archiveRunSession(failed)
-            await this.pruneWorkspaceHistory(current.targetSnapshot.workspaceId)
+            await this.pruneAfterExecution(current.targetSnapshot.workspaceId)
           }
         } catch (recordError: unknown) {
           this.ctx.logger.warn(`dsh-automation: could not persist failure for run '${run.id}': ${asMessage(recordError)}`)
@@ -675,7 +732,7 @@ export class AutomationService {
         error: { code: 'definition_deleted', message: 'The automation was deleted before this run started.' },
         unread: true,
       })
-      await this.pruneWorkspaceHistory(run.targetSnapshot.workspaceId)
+      await this.pruneAfterExecution(run.targetSnapshot.workspaceId)
       return
     }
     const startedAt = toIso()
@@ -702,7 +759,7 @@ export class AutomationService {
     }
     await this.runs.put(run.id, completed)
     await this.archiveRunSession(completed)
-    await this.pruneWorkspaceHistory(run.targetSnapshot.workspaceId)
+    await this.pruneAfterExecution(run.targetSnapshot.workspaceId)
   }
 
   private armNextTimer(now: string): void {
@@ -810,7 +867,9 @@ export class AutomationService {
     }
     for (const terminal of terminalByAutomation.values()) {
       terminal.sort(compareRuns)
-      for (const run of terminal.slice(this.config.historyLimit)) await this.runs.delete(run.id)
+      const removed = terminal.slice(this.config.historyLimit)
+      await this.retainOccurrenceReceipts(removed)
+      for (const run of removed) await this.runs.delete(run.id)
     }
   }
 

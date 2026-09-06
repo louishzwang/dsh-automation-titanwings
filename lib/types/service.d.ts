@@ -134,6 +134,12 @@ export declare class AutomationService {
     private claimMissedRuns;
     /** A succeeded "run ahead" manual run counts as having handled its target occurrence. */
     private isReplacedByManualRun;
+    private relatedRuns;
+    private nextPendingOccurrence;
+    /** Persist minimal receipts before removing facts. A failed write leaves history intact. */
+    private retainOccurrenceReceipts;
+    /** Completion runs outside the admission queue; serialize checkpoint writes with edits. */
+    private pruneAfterExecution;
     private startQueuedRuns;
     private startRun;
     private executeRun;

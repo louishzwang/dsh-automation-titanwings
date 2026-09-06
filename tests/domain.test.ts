@@ -218,3 +218,18 @@ test('strict validation rejects blank prompts and unsafe permission presets', ()
     ...definition(), permissionPreset: 'danger-full-access',
   }).success, false)
 })
+
+
+test('optional execution receipts preserve version-one data and survive ordinary edits', () => {
+  const legacy = definition()
+  assert.equal(automationDefinitionSchema.parse(legacy).scheduleHandledThrough, undefined)
+  const value = automationDefinitionSchema.parse({
+    ...legacy,
+    scheduleHandledThrough: '2026-08-13T01:00:00.000Z',
+    retiredReplacements: ['2026-08-14T01:00:00.000Z'],
+  })
+  const updated = updateDefinition(value, { name: 'Renamed', now: '2026-08-13T02:00:00.000Z' })
+  assert.equal(updated.version, 1)
+  assert.equal(updated.scheduleHandledThrough, value.scheduleHandledThrough)
+  assert.deepEqual(updated.retiredReplacements, value.retiredReplacements)
+})
