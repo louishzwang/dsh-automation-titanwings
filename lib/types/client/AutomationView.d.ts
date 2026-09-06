@@ -1,5 +1,11 @@
 import type { AutomationViewProps, Translate } from './contracts.js';
 import type { AutomationRunViewModel } from './protocol.js';
+interface TimeZoneChoice {
+    readonly value: string;
+    readonly label: string;
+}
+/** Cache standard-offset labels without rebuilding hundreds of formatters while typing. */
+export declare function timeZoneChoices(current: string): readonly TimeZoneChoice[];
 export interface AutomationFloatBox {
     readonly x: number;
     readonly y: number;
@@ -36,3 +42,4 @@ export declare function RecentRun({ run, now, t, busy, automationMissing, confir
 }): JSX.Element;
 /** Native conversation view: all data and effects arrive through the slot's four shares. */
 export declare function AutomationView({ t, useAutomationState, refresh, createAutomation, updateAutomation, mutateAutomation, runNow, markRunRead, deleteRun, updateSettings, loadModelCatalog, openSession, refreshSessions, }: AutomationViewProps): JSX.Element;
+export {};

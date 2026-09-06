@@ -37,12 +37,14 @@ export function readDraft(storage: SortPreferenceStorage | undefined, key: strin
   }
 }
 
-export function writeDraft(storage: SortPreferenceStorage | undefined, key: string, form: AutomationFormState): void {
-  if (storage === undefined) return
+export function writeDraft(storage: SortPreferenceStorage | undefined, key: string, form: AutomationFormState): boolean {
+  if (storage === undefined) return false
   try {
     storage.setItem(key, JSON.stringify(form))
+    return true
   } catch {
     // Draft persistence is best-effort; storage denial must not unmount the form.
+    return false
   }
 }
 
@@ -581,4 +583,13 @@ export function writeSortDefault(
   } catch {
     // Preference persistence is best-effort; storage denial must not break sorting.
   }
+}
+
+
+/** Preference reads also tolerate browsers that expose storage but deny getItem. */
+export function readRangeDefault(storage: SortPreferenceStorage | undefined, key: string): 'week' | 'month' | 'list' {
+  try {
+    const value = storage?.getItem(key)
+    return value === 'month' || value === 'list' ? value : 'week'
+  } catch { return 'week' }
 }

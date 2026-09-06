@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
+import { startRefreshLoop } from './refresh-loop.js'
 import type { AutomationViewProps, Translate } from './contracts.js'
 import type { AutomationLocaleKey } from './locales.js'
 import {
@@ -24,6 +25,7 @@ import {
   readDraft,
   reasoningEffortChoices,
   readSortDefault,
+  readRangeDefault,
   resolveSortPreferenceStorage,
   shortSessionId,
   sortAutomations,
@@ -113,8 +115,12 @@ function zoneUtcOffset(zone: string): { readonly minutes: number; readonly label
   }
 }
 
-function timeZoneChoices(current: string): readonly { readonly value: string; readonly label: string }[] {
-  const items = cityZoneList().map(zone => {
+interface TimeZoneChoice { readonly value: string; readonly label: string }
+let baseTimeZoneChoices: readonly TimeZoneChoice[] | undefined
+
+/** Cache standard-offset labels without rebuilding hundreds of formatters while typing. */
+export function timeZoneChoices(current: string): readonly TimeZoneChoice[] {
+  baseTimeZoneChoices ??= cityZoneList().map(zone => {
     const offset = zoneUtcOffset(zone)
     const city = zone === 'UTC' ? 'UTC' : (zone.split('/').pop() ?? zone).replace(/_/g, ' ')
     return {
@@ -123,11 +129,9 @@ function timeZoneChoices(current: string): readonly { readonly value: string; re
       minutes: offset.minutes,
     }
   }).sort((left, right) => left.minutes - right.minutes || left.label.localeCompare(right.label))
-  if (!items.some(item => item.value === current)) {
-    const offset = zoneUtcOffset(current)
-    items.push({ value: current, label: `${current} (${offset.label})`, minutes: offset.minutes })
-  }
-  return items.map(({ value, label }) => ({ value, label }))
+  if (baseTimeZoneChoices.some(item => item.value === current)) return baseTimeZoneChoices
+  const offset = zoneUtcOffset(current)
+  return [...baseTimeZoneChoices, { value: current, label: `${current} (${offset.label})` }]
 }
 const SORT_STORAGE: SortPreferenceStorage | undefined = resolveSortPreferenceStorage(
   typeof window === 'undefined' ? undefined : window,
@@ -421,7 +425,9 @@ function AutomationFloat({ label, busy, onClose, anchor, height, children }: {
 type AutomationFormProps = FormCommonProps & ({
   readonly mode: 'create'
   readonly initial: AutomationFormState | undefined
-  readonly onSaveDraft?: (form: AutomationFormState) => void
+  readonly onSaveDraft?: (form: AutomationFormState) => boolean
+  readonly onDraftChange?: (form: AutomationFormState) => void
+  readonly onFlushDraft?: () => void
   readonly onSubmit: (input: CreateAutomationInput) => Promise<void>
 } | {
   readonly mode: 'edit'
@@ -434,6 +440,7 @@ function AutomationForm(props: AutomationFormProps): JSX.Element {
   const [form, setForm] = useState<AutomationFormState>(() => props.mode === 'create'
     ? props.initial ?? defaultFormState()
     : formStateFromAutomation(props.automation))
+  const zoneChoices = useMemo(() => timeZoneChoices(form.timeZone), [form.timeZone])
   const [draftSaved, setDraftSaved] = useState(false)
   const [validationError, setValidationError] = useState<string>()
   const [catalog, setCatalog] = useState<ModelCatalog>({ groups: [], failures: [] })
@@ -469,11 +476,15 @@ function AutomationForm(props: AutomationFormProps): JSX.Element {
     setValidationError(undefined)
   }
   const onSaveDraftProp = props.mode === 'create' ? props.onSaveDraft : undefined
+  const onDraftChange = props.mode === 'create' ? props.onDraftChange : undefined
+  const onFlushDraft = props.mode === 'create' ? props.onFlushDraft : undefined
   useEffect(() => {
+    onDraftChange?.(form)
     if (onSaveDraftProp === undefined) return
-    onSaveDraftProp(form)
-    setDraftSaved(true)
-  }, [form, onSaveDraftProp])
+    const timer = window.setTimeout(() => { setDraftSaved(onSaveDraftProp(form)) }, 250)
+    return () => { window.clearTimeout(timer) }
+  }, [form, onSaveDraftProp, onDraftChange])
+  useEffect(() => () => { onFlushDraft?.() }, [onFlushDraft])
   const toggleWeekday = (day: number): void => {
     update('weekdays', form.weekdays.includes(day)
       ? form.weekdays.filter(value => value !== day)
@@ -686,7 +697,7 @@ function AutomationForm(props: AutomationFormProps): JSX.Element {
                   value={form.timeZone}
                   onChange={event => update('timeZone', event.currentTarget.value)}
                 >
-                  {timeZoneChoices(form.timeZone).map(zone => (
+                  {zoneChoices.map(zone => (
                     <option key={zone.value} value={zone.value}>{zone.label}</option>
                   ))}
                 </select>
@@ -737,8 +748,7 @@ function AutomationForm(props: AutomationFormProps): JSX.Element {
             type="button"
             disabled={busy || draftSaved}
             onClick={() => {
-              props.onSaveDraft?.(form)
-              setDraftSaved(true)
+              setDraftSaved(props.onSaveDraft?.(form) === true)
             }}
           >
             {draftSaved ? <CheckIcon /> : null}
@@ -1191,9 +1201,7 @@ export function AutomationView({
   const [sortDirection, setSortDirection] = useState<AutomationSortDirection>(() => readSortDefault(SORT_STORAGE, WORKSPACE_SORT_DEFAULT_KEY)?.direction ?? 'desc')
   const [taskView, setTaskView] = useState<TaskView>('today')
   const [rangeView, setRangeView] = useState<CalendarRangeView>(() => {
-    if (SORT_STORAGE === undefined) return 'week'
-    const raw = SORT_STORAGE.getItem(WORKSPACE_RANGE_DEFAULT_KEY)
-    return raw === 'week' || raw === 'month' || raw === 'list' ? raw : 'week'
+    return readRangeDefault(SORT_STORAGE, WORKSPACE_RANGE_DEFAULT_KEY)
   })
   const [calendarCursor, setCalendarCursor] = useState<Date>()
   const [selectedDate, setSelectedDate] = useState<Date>()
@@ -1206,50 +1214,45 @@ export function AutomationView({
   const runNowAnchorRef = useRef<DOMRect | undefined>(undefined)
   const settingsAnchorRef = useRef<DOMRect | undefined>(undefined)
   const runsSignatureRef = useRef('')
-  const phaseRef = useRef(state.phase)
-  phaseRef.current = state.phase
-  useEffect(() => {
-    // Refresh the global session list whenever a run starts or settles, so
-    // the automation's conversation appears in the workspace list without
-    // having to open it from the run record first.
-    const syncSessions = (): void => {
-      const runs = latestSnapshotRef.current?.runs ?? []
-      const signature = runs.map(run => `${run.id}:${run.status}`).join('|')
-      if (signature !== runsSignatureRef.current) {
-        runsSignatureRef.current = signature
-        void refreshSessions().catch(() => undefined)
-      }
-    }
-    const poll = (): void => { void refresh().then(syncSessions, syncSessions) }
-    poll()
-    let timer: number | undefined
-    // Recover quickly from a not-yet-live source session and transient errors;
-    // settle back to the regular cadence once the snapshot is ready.
-    const schedule = (): void => {
-      const phase = phaseRef.current
-      timer = window.setTimeout(() => {
-        poll()
-        schedule()
-      }, phase === 'unavailable' || phase === 'error' ? RETRY_FAST_MS : POLL_INTERVAL_MS)
-    }
-    schedule()
-    return () => { if (timer !== undefined) window.clearTimeout(timer) }
-  }, [refresh, refreshSessions])
+  useEffect(() => startRefreshLoop(refresh, {
+    intervalMs: POLL_INTERVAL_MS,
+    retryMs: RETRY_FAST_MS,
+    isVisible: () => !document.hidden,
+    subscribeVisibility: listener => {
+      document.addEventListener('visibilitychange', listener)
+      return () => { document.removeEventListener('visibilitychange', listener) }
+    },
+  }), [refresh])
 
   const snapshot = state.snapshot
-  const latestSnapshotRef = useRef(snapshot)
-  latestSnapshotRef.current = snapshot
+  useEffect(() => {
+    const signature = (snapshot?.runs ?? []).map(run => `${run.id}:${run.status}`).join('|')
+    if (signature !== runsSignatureRef.current) {
+      runsSignatureRef.current = signature
+      void refreshSessions().catch(() => undefined)
+    }
+  }, [snapshot?.runs, refreshSessions])
   const draftKey = snapshot === undefined
     ? undefined
     : `dsh-automation.draft.workspace.${snapshot.scope.workspaceId ?? 'local'}`
   useEffect(() => {
     setDraft(draftKey === undefined ? undefined : readDraft(SORT_STORAGE, draftKey))
   }, [draftKey])
-  const saveDraft = useCallback((form: AutomationFormState): void => {
-    if (draftKey === undefined) return
-    writeDraft(SORT_STORAGE, draftKey, form)
+  const trackDraft = useCallback((form: AutomationFormState): void => {
     draftRef.current.form = form
+  }, [])
+  const saveDraft = useCallback((form: AutomationFormState): boolean => {
+    draftRef.current.form = form
+    return draftKey !== undefined && writeDraft(SORT_STORAGE, draftKey, form)
   }, [draftKey])
+  const flushDraft = useCallback((): void => {
+    const form = draftRef.current.form
+    if (draftKey !== undefined && form !== undefined) writeDraft(SORT_STORAGE, draftKey, form)
+  }, [draftKey])
+  useEffect(() => {
+    window.addEventListener('pagehide', flushDraft)
+    return () => { window.removeEventListener('pagehide', flushDraft); flushDraft() }
+  }, [flushDraft])
   const hasDraftContent = (): boolean => {
     const form = draftRef.current.form
     return form !== undefined && (form.name.trim() !== '' || form.prompt.trim() !== '')
@@ -1544,7 +1547,7 @@ export function AutomationView({
       <div className="dsh-automation-shell dsh-automation-centered" data-conversation-composer-overlay="">
         <span className="dsh-automation-error-icon"><AlertIcon /></span>
         <h2>{t('error.title')}</h2>
-        <p>{state.error}</p>
+        <p>{state.refreshAfterMutationFailed ? t('error.savedRefresh') : state.error}</p>
         <button className="dsh-automation-button dsh-automation-button--primary" type="button" onClick={() => { void refresh().catch(() => undefined) }}>
           <RefreshIcon />{t('error.retry')}
         </button>
@@ -1595,6 +1598,8 @@ export function AutomationView({
             mode="create"
             initial={draft}
             onSaveDraft={saveDraft}
+            onDraftChange={trackDraft}
+            onFlushDraft={flushDraft}
             t={t}
             busy={busyKey === actionKey('create')}
             loadModelCatalog={loadModelCatalog}
@@ -1663,7 +1668,7 @@ export function AutomationView({
       )}
 
       {(actionError !== undefined || (state.error !== undefined && state.phase !== 'unavailable')) && (
-        <div className="dsh-automation-inline-error" role="alert"><AlertIcon />{actionError ?? state.error}</div>
+        <div className="dsh-automation-inline-error" role="alert"><AlertIcon />{actionError ?? (state.refreshAfterMutationFailed ? t('error.savedRefresh') : state.error)}</div>
       )}
 
       <div className="dsh-automation-content">

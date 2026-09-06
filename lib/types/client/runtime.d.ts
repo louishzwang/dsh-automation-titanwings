@@ -5,6 +5,7 @@ export interface AutomationClientState {
     readonly snapshot?: AutomationSnapshot;
     readonly error?: string;
     readonly refreshedAt?: number;
+    readonly refreshAfterMutationFailed?: boolean;
 }
 export interface AutomationStateSource {
     getSnapshot(): AutomationClientState;
@@ -23,7 +24,7 @@ export interface AutomationRuntime {
     updateSettings(settings: SettingsUpdateInput): Promise<void>;
     openRunSession(runId: string, open: () => Promise<void>): Promise<void>;
 }
-/** Load the Host catalog through the Session remote service DSH 2.0.x ships. */
+/** Keep valid provider/model rows and explicitly report malformed partial responses. */
 export declare function loadModelCatalog(remote: ClientRemote): Promise<ModelCatalog>;
 /** One session-scoped observable; the framework binds it into useAutomationState. */
 export declare function createAutomationRuntime(rpc: ClientRpc, sessionId: string): AutomationRuntime;

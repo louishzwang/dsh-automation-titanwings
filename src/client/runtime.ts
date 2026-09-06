@@ -25,6 +25,7 @@ export interface AutomationClientState {
   readonly snapshot?: AutomationSnapshot
   readonly error?: string
   readonly refreshedAt?: number
+  readonly refreshAfterMutationFailed?: boolean
 }
 
 export interface AutomationStateSource {
@@ -46,25 +47,54 @@ export interface AutomationRuntime {
   openRunSession(runId: string, open: () => Promise<void>): Promise<void>
 }
 
-function isModelCatalog(value: unknown): value is ModelCatalog {
-  if (typeof value !== 'object' || value === null) return false
-  const candidate = value as Partial<ModelCatalog>
-  return Array.isArray(candidate.groups)
-    && candidate.groups.every(group => (
-      typeof group === 'object'
-      && group !== null
-      && typeof group.id === 'string'
-      && typeof group.name === 'string'
-      && Array.isArray(group.models)
-    ))
-    && Array.isArray(candidate.failures)
+function object(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+function named(value: unknown): value is Record<string, unknown> & { id: string; name: string } {
+  return object(value) && typeof value.id === 'string' && value.id.trim() !== '' && typeof value.name === 'string'
+}
+function model(value: unknown): boolean {
+  if (!named(value) || (value.description !== undefined && typeof value.description !== 'string')) return false
+  if (value.reasoning === undefined) return true
+  const reasoning = value.reasoning
+  return object(reasoning) && Array.isArray(reasoning.efforts)
+    && reasoning.efforts.every(effort => named(effort)
+      && (effort.description === undefined || typeof effort.description === 'string'))
+    && (reasoning.defaultEffort === undefined || typeof reasoning.defaultEffort === 'string')
 }
 
-/** Load the Host catalog through the Session remote service DSH 2.0.x ships. */
+/** Keep valid provider/model rows and explicitly report malformed partial responses. */
 export async function loadModelCatalog(remote: ClientRemote): Promise<ModelCatalog> {
-  const catalog = unwrapRpcResult<ModelCatalog>(await remote.session.modelCatalog())
-  if (!isModelCatalog(catalog)) throw new Error('The model catalog returned an invalid response.')
-  return catalog
+  const value: unknown = unwrapRpcResult(await remote.session.modelCatalog())
+  if (!object(value) || !Array.isArray(value.groups) || !Array.isArray(value.failures)) {
+    throw new Error('The model catalog returned an invalid response.')
+  }
+  let changed = false
+  const failures: Array<{ id: string; name: string; message: string }> = []
+  for (const failure of value.failures) {
+    if (named(failure) && typeof failure.message === 'string') {
+      failures.push({ id: failure.id, name: failure.name, message: failure.message })
+    } else {
+      changed = true
+      failures.push({ id: 'invalid-failure', name: 'Model catalog', message: 'The model catalog returned an invalid failure record.' })
+    }
+  }
+  const groups: ModelCatalog['groups'][number][] = []
+  for (const [index, group] of value.groups.entries()) {
+    if (!named(group) || !Array.isArray(group.models)) {
+      changed = true
+      failures.push({ id: named(group) ? group.id : 'invalid-provider-' + index,
+        name: named(group) ? group.name : 'Model catalog', message: 'The provider returned an invalid model catalog.' })
+      continue
+    }
+    const models = group.models.filter(model)
+    if (models.length !== group.models.length) {
+      changed = true
+      failures.push({ id: group.id, name: group.name, message: 'Some invalid model entries were omitted. You can retry loading this provider.' })
+    }
+    groups.push({ id: group.id, name: group.name, models: models as ModelCatalog['groups'][number]['models'] })
+  }
+  return changed ? { groups, failures } : value as unknown as ModelCatalog
 }
 
 /** One session-scoped observable; the framework binds it into useAutomationState. */
@@ -72,15 +102,22 @@ export function createAutomationRuntime(rpc: ClientRpc, sessionId: string): Auto
   let state: AutomationClientState = { phase: 'idle' }
   let refreshPromise: Promise<void> | undefined
   const listeners = new Set<() => void>()
+  let subscribed = false
+  let committedMutation = false
   const publish = (next: AutomationClientState): void => {
-    state = next
+    state = subscribed && listeners.size === 0 ? { phase: 'idle' } : next
     for (const listener of [...listeners]) listener()
   }
   const source: AutomationStateSource = {
     getSnapshot: () => state,
     subscribe: (listener) => {
+      subscribed = true
       listeners.add(listener)
-      return () => { listeners.delete(listener) }
+      return () => {
+        listeners.delete(listener)
+        // Preserve identity during StrictMode replay, but release inactive sessions' snapshots.
+        queueMicrotask(() => { if (listeners.size === 0) state = { phase: 'idle' } })
+      }
     },
   }
 
@@ -99,6 +136,7 @@ export function createAutomationRuntime(rpc: ClientRpc, sessionId: string): Auto
         const payload: SnapshotRequest = { sessionId }
         const response = await rpc.call(CHANNEL, 'snapshot', payload)
         const snapshot = unwrapRpcResult<AutomationSnapshot>(response)
+        committedMutation = false
         publish({ phase: 'ready', snapshot, refreshedAt: Date.now() })
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
@@ -108,11 +146,12 @@ export function createAutomationRuntime(rpc: ClientRpc, sessionId: string): Auto
         const unavailable = /requires a live source session/.test(message)
         const phase = unavailable ? 'unavailable' : 'error'
         publish(previous === undefined
-          ? { phase, error: message }
+          ? { phase, error: message, refreshAfterMutationFailed: committedMutation }
           : {
               phase,
               snapshot: previous,
               error: message,
+              refreshAfterMutationFailed: committedMutation,
               ...(state.refreshedAt === undefined ? {} : { refreshedAt: state.refreshedAt }),
             })
         throw error
@@ -129,7 +168,9 @@ export function createAutomationRuntime(rpc: ClientRpc, sessionId: string): Auto
     // then require a post-mutation snapshot instead of accepting stale data.
     const pendingBeforeRefresh = refreshPromise
     if (pendingBeforeRefresh !== undefined) await pendingBeforeRefresh.catch(() => undefined)
-    await refresh()
+    committedMutation = true
+    // The write was acknowledged. A read failure must never invite resubmission.
+    await refresh().catch(() => undefined)
   }
   const markRunRead = async (runId: string): Promise<void> => {
     const payload: MarkReadRequest = { sessionId, runId }

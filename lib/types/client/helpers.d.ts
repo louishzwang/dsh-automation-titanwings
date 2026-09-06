@@ -7,7 +7,7 @@ export interface DayAutomationCounts {
 }
 /** 读取本地草稿；缺失、损坏或非表单结构时返回 undefined。 */
 export declare function readDraft(storage: SortPreferenceStorage | undefined, key: string): AutomationFormState | undefined;
-export declare function writeDraft(storage: SortPreferenceStorage | undefined, key: string, form: AutomationFormState): void;
+export declare function writeDraft(storage: SortPreferenceStorage | undefined, key: string, form: AutomationFormState): boolean;
 export declare function clearDraft(storage: SortPreferenceStorage | undefined, key: string): void;
 export interface AutomationFormState {
     readonly name: string;
@@ -100,3 +100,5 @@ export declare function readSortDefault(storage: SortPreferenceStorage | undefin
     readonly direction: AutomationSortDirection;
 } | undefined;
 export declare function writeSortDefault(storage: SortPreferenceStorage, storageKey: string, key: AutomationSortKey, direction: AutomationSortDirection): void;
+/** Preference reads also tolerate browsers that expose storage but deny getItem. */
+export declare function readRangeDefault(storage: SortPreferenceStorage | undefined, key: string): 'week' | 'month' | 'list';

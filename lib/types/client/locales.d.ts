@@ -1,6 +1,7 @@
 export declare const NS = "dsh-automation";
 export declare const en: {
     readonly tab: "Automations";
+    readonly 'error.savedRefresh': "The action completed, but the list could not refresh. Refresh before taking another action.";
     readonly 'sidebar.open': "Open Automations";
     readonly 'sidebar.tooltip': "New automation";
     readonly 'sidebar.unavailable': "Start a conversation before opening Automations.";

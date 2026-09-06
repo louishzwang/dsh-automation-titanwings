@@ -2,6 +2,7 @@ export const NS = 'dsh-automation'
 
 export const en = {
   tab: 'Automations',
+  'error.savedRefresh': 'The action completed, but the list could not refresh. Refresh before taking another action.',
   'sidebar.open': 'Open Automations',
   'sidebar.tooltip': 'New automation',
   'sidebar.unavailable': 'Start a conversation before opening Automations.',
@@ -223,6 +224,7 @@ export type AutomationLocaleKey = keyof typeof en
 
 export const zh: Record<AutomationLocaleKey, string> = {
   tab: '自动化',
+  'error.savedRefresh': '操作已完成，但列表刷新失败。请刷新列表后再进行下一次操作。',
   'sidebar.open': '打开自动化',
   'sidebar.tooltip': '新建自动化',
   'sidebar.unavailable': '请先开始一个对话，再打开自动化。',

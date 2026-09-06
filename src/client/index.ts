@@ -14,6 +14,7 @@ export function apply(ctx: ClientContext): void {
   ctx.effect(() => installStyles(), 'dsh-automation: styles')
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'dsh-automation: locale')
   const t = ctx.locale.bind(NS)
+  const refreshSessions = (): Promise<void> => ctx.sessions.refresh()
   const catalogRequests = new Map<string, Promise<ModelCatalog>>()
   const readModelCatalog = (): Promise<ModelCatalog> => {
     // StrictMode replays effects in development; share one in-flight request.
@@ -58,7 +59,7 @@ export function apply(ctx: ClientContext): void {
         deleteRun: runtime.deleteRun,
         updateSettings: runtime.updateSettings,
         loadModelCatalog: readModelCatalog,
-        refreshSessions: () => ctx.sessions.refresh(),
+        refreshSessions,
         openSession: (runId, runSessionId) => runtime!.openRunSession(runId, async () => {
           await ctx.sessions.refresh()
           ctx.sessions.open(runSessionId)
