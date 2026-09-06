@@ -46,6 +46,7 @@ export interface AutomationSnapshot {
     };
     readonly definitions: readonly AutomationDefinitionView[];
     readonly runs: readonly AutomationRunView[];
+    readonly attentionCount?: number;
 }
 export interface AutomationDefinitionView extends AutomationDefinition {
     readonly nextRunAt: string | null;

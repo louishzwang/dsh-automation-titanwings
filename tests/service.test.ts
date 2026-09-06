@@ -1387,3 +1387,22 @@ test('saving replay policy wakes the scheduler without another task mutation', a
   assert.equal([...h.domain.runs.records.values()][0]?.status, 'queued')
   await h.service.dispose()
 })
+
+
+test('snapshot keeps active and unread problems outside the ordinary history limit', async () => {
+  const d = storedDefinition('2026-08-10T00:00:00Z')
+  const definitions = [d, { ...d, id: 'success' }, { ...d, id: 'active' }]
+  const problem = { ...createManualRun(d, '2026-08-11T09:00:00Z'), status: 'failed' as const }
+  const success = { ...createManualRun(definitions[1]!, '2026-08-13T09:00:00Z'), status: 'succeeded' as const }
+  const h = await harness({ definitions, runs: [problem, success], config: { historyLimit: 1 } })
+  const active = { ...createManualRun(definitions[2]!, '2026-08-12T09:00:00Z'), status: 'running' as const }
+  await h.domain.runs.put(active.id, active)
+  const first = await h.service.snapshot(scope)
+  assert.equal(first.attentionCount, 1)
+  assert.deepEqual(first.runs.map(r => r.id), [success.id, active.id, problem.id])
+  await h.service.markRead(scope, problem.id)
+  const second = await h.service.snapshot(scope)
+  assert.equal(second.attentionCount, 0)
+  assert.deepEqual(second.runs.map(r => r.id), [success.id, active.id])
+  await h.service.dispose()
+})

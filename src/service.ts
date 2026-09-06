@@ -16,7 +16,7 @@ import {
   updateDefinition,
 } from './domain.ts'
 import { executeAutomationRun } from './executor.ts'
-import { latestDueOccurrence, nextOccurrence, occurrencesBetween } from './recurrence.ts'
+import { latestDueOccurrence, nextOccurrence, recentOccurrencesBetween } from './recurrence.ts'
 import type {
   AutomationDefinition,
   AutomationRun,
@@ -73,6 +73,7 @@ export interface AutomationSnapshot {
   readonly workspace: { readonly id: string; readonly title: string; readonly path: string }
   readonly definitions: readonly AutomationDefinitionView[]
   readonly runs: readonly AutomationRunView[]
+  readonly attentionCount?: number
 }
 
 export interface AutomationDefinitionView extends AutomationDefinition {
@@ -226,8 +227,19 @@ export class AutomationService {
         .map(([, run]) => run)
         .filter(run => run.targetSnapshot.workspaceId === resolved.workspace.id)
         .sort(compareRuns)
+      const relatedById = new Map<string, AutomationRun[]>()
+      for (const run of workspaceRuns) {
+        const related = relatedById.get(run.automationId) ?? []
+        related.push(run)
+        relatedById.set(run.automationId, related)
+      }
+      const needsAttention = (run: AutomationRun): boolean => run.unread
+        && (run.status === 'failed' || run.status === 'skipped' || run.status === 'cancelled')
+      const attentionCount = workspaceRuns.filter(needsAttention).length
       const archivedSessionIds = new Set(this.ctx.workspaceRegistry.archivedSessionIds.map(String))
-      const runs = workspaceRuns.slice(0, this.config.historyLimit).map((run): AutomationRunView => ({
+      const runs = workspaceRuns.filter((run, index) => index < this.config.historyLimit
+        || run.status === 'queued' || run.status === 'running' || needsAttention(run)
+      ).map((run): AutomationRunView => ({
         ...run,
         sessionArchived: run.sessionId !== null && archivedSessionIds.has(run.sessionId),
       }))
@@ -236,7 +248,7 @@ export class AutomationService {
         generatedAt,
         workspace: resolved.workspace,
         definitions: definitions.map((definition) => {
-          const related = workspaceRuns.filter(run => run.automationId === definition.id)
+          const related = relatedById.get(definition.id) ?? []
           // Occurrences already fulfilled by a succeeded "run ahead"/launch run
           // are not pending: skip them when deriving the next run time.
           const nextRunAt = this.nextPendingOccurrence(definition, related, generatedAt)
@@ -248,6 +260,7 @@ export class AutomationService {
           }
         }),
         runs,
+        attentionCount,
       }
     }, signal)
   }
@@ -555,17 +568,10 @@ export class AutomationService {
     const waitMs = this.settings().misfireGraceMinutes * 60_000
     // Include an occurrence exactly on the grace boundary (also when wait = 0).
     const sinceMs = Math.max(Date.parse(definition.createdAt), handledThrough, nowMs - waitMs - 1)
-    // Daily/weekly/once schedules produce at most one occurrence per day, so a
-    // window-sized limit returns the full candidate list without truncating
-    // the recent end; the backlog slice below then keeps the newest cap.
-    const windowDays = Math.ceil((nowMs - sinceMs) / 86_400_000) + 2
-    const candidates = occurrencesBetween(
-      definition.schedule,
-      new Date(sinceMs).toISOString(),
-      now,
-      windowDays,
+    const backlog = recentOccurrencesBetween(
+      definition.schedule, new Date(sinceMs).toISOString(), now,
+      this.settings().catchUpMissedRunsMax,
     )
-    const backlog = candidates.slice(-this.settings().catchUpMissedRunsMax)
     for (const scheduledFor of backlog) {
       if (related.some(run => run.trigger === 'schedule' && run.scheduledFor === scheduledFor)) continue
       if (this.isReplacedByManualRun(definition, related, scheduledFor)) continue
@@ -579,13 +585,12 @@ export class AutomationService {
     const staleSinceMs = Math.max(Date.parse(definition.createdAt), handledThrough)
     const staleUntilMs = nowMs - waitMs - 1
     if (staleUntilMs > staleSinceMs) {
-      const staleDays = Math.ceil((staleUntilMs - staleSinceMs) / 86_400_000) + 2
-      const stale = occurrencesBetween(
+      const stale = recentOccurrencesBetween(
         definition.schedule,
         new Date(staleSinceMs).toISOString(),
         new Date(staleUntilMs).toISOString(),
-        staleDays,
-      ).slice(-this.settings().catchUpMissedRunsMax)
+        this.settings().catchUpMissedRunsMax,
+      )
       for (const scheduledFor of stale) {
         if (related.some(run => run.trigger === 'schedule' && run.scheduledFor === scheduledFor)) continue
         if (this.isReplacedByManualRun(definition, related, scheduledFor)) continue
@@ -773,7 +778,7 @@ export class AutomationService {
       if (target === undefined || candidate < target) target = candidate
     }
     if (target === undefined) return
-    const delay = Math.max(1, Math.min(target - Date.parse(now), MAX_TIMER_DELAY_MS))
+    const delay = Math.max(1, Math.min(target - Date.now(), MAX_TIMER_DELAY_MS))
     this.timer = setTimeout(() => {
       this.timer = undefined
       this.requestPump()

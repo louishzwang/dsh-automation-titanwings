@@ -103,6 +103,7 @@ export interface AutomationSnapshot {
     readonly automations: readonly AutomationViewModel[];
     readonly runs: readonly AutomationRunViewModel[];
     readonly settings?: AutomationSettingsView;
+    readonly attentionCount?: number;
     readonly serverNow: string;
 }
 export interface CreateAutomationInput {

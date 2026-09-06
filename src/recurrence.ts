@@ -213,3 +213,25 @@ function formatLocal(value: DateTime): string {
 }
 
 const farFutureIso = '9999-12-31T23:59:59.999Z'
+
+
+/** Newest bounded occurrences, returned oldest first without scanning an entire backlog. */
+export function recentOccurrencesBetween(
+  schedule: AutomationSchedule,
+  afterExclusive: string,
+  untilInclusive: string,
+  limit: number,
+): string[] {
+  assertValidSchedule(schedule)
+  const after = parseInstant(afterExclusive, 'afterExclusive').toMillis()
+  let cursor = parseInstant(untilInclusive, 'untilInclusive').toMillis()
+  if (!Number.isInteger(limit) || limit < 1 || cursor <= after) return []
+  const values: string[] = []
+  while (values.length < limit && cursor > after) {
+    const due = latestDueOccurrence(schedule, new Date(cursor).toISOString())
+    if (due === null || Date.parse(due) <= after) break
+    values.push(due)
+    cursor = Date.parse(due) - 1
+  }
+  return values.reverse()
+}

@@ -194,6 +194,7 @@ async function snapshotValue(service: AutomationService, payload: Record<string,
       reasoningEffort: run.targetSnapshot.reasoningEffort,
       permission: run.targetSnapshot.permissionPreset,
     })),
+    ...(snapshot.attentionCount === undefined ? {} : { attentionCount: snapshot.attentionCount }),
     settings: service.settings(),
     serverNow: snapshot.generatedAt,
   }
