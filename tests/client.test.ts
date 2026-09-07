@@ -571,7 +571,7 @@ test('run cards expose re-add and record-delete actions with a confirm step', ()
   assert.match(confirming.filter(node => node.type === 'button').map(node => String(node.props?.children)).join(' | '), /Confirm delete/)
 })
 
-test('skipped and cancelled runs offer mark-reviewed exactly while unread', () => {
+test('legacy skipped and cancelled runs offer ignore reminder exactly while unread', () => {
   type RenderedNode = {
     readonly type?: unknown
     readonly props?: { readonly className?: string; readonly children?: unknown }
@@ -595,7 +595,7 @@ test('skipped and cancelled runs offer mark-reviewed exactly while unread', () =
     onConfirmDelete: () => {}, onDelete: () => {},
   }) as unknown)
   const offersMarkReviewed = (status: 'skipped' | 'cancelled', unread: boolean): boolean => render(status, unread)
-    .some(node => node.type === 'button' && String(node.props?.children).includes('Mark reviewed'))
+    .some(node => node.type === 'button' && String(node.props?.children).includes('Ignore reminder'))
   for (const status of ['skipped', 'cancelled'] as const) {
     assert.equal(offersMarkReviewed(status, true), true)
     assert.equal(offersMarkReviewed(status, false), false)
@@ -732,4 +732,21 @@ test('sort default preferences survive storage roundtrips and reject corrupt val
   assert.equal(readSortDefault(storage, WORKSPACE_SORT_DEFAULT_KEY), undefined)
   values.set(WORKSPACE_SORT_DEFAULT_KEY, JSON.stringify({ key: 'title', direction: 'asc' }))
   assert.equal(readSortDefault(storage, WORKSPACE_SORT_DEFAULT_KEY), undefined)
+})
+
+
+test('new hosts separate opening a conversation from ignoring and refresh every resolution', async () => {
+  const calls: string[] = []
+  const snapshot = { scope: { cwd: '/test' }, automations: [], runs: [], serverNow: new Date().toISOString(), runResolutionSupported: true }
+  const runtime = createAutomationRuntime({ call: async (_channel, endpoint) => {
+    calls.push(endpoint)
+    return { ok: true, value: endpoint === 'snapshot' ? snapshot : {} }
+  } }, 'source')
+  await runtime.refresh()
+  calls.length = 0
+  await runtime.openRunSession('r', async () => {})
+  await runtime.confirmRun('r')
+  await runtime.retryRun('r')
+  await runtime.markRunRead('r')
+  assert.deepEqual(calls, ['read-run', 'snapshot', 'confirm-run', 'snapshot', 'retry-run', 'snapshot', 'mark-read', 'snapshot'])
 })

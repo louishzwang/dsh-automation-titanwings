@@ -40,11 +40,12 @@ test('snapshot marks archived run Sessions so the client never offers a broken o
         status: 'succeeded', trigger: 'manual', scheduledFor: '2026-08-17T00:00:00.000Z',
         startedAt: '2026-08-17T00:00:01.000Z', finishedAt: '2026-08-17T00:00:02.000Z',
         sessionId: 'dsh-automation-session-archived', sessionArchived: true,
-        summary: 'No regression found.', unread: false,
+        summary: 'No regression found.', unread: false, needsAttention: false,
         promptSnapshot: 'Inspect one condition.',
         provider: null, model: null, reasoningEffort: null, permission: 'read-only',
       }],
       settings: { catchUpMissedRuns: false, catchUpMissedRunsMax: 30, misfireGraceMinutes: 15 },
+      runResolutionSupported: true,
       serverNow: '2026-08-17T00:00:00.000Z',
     },
   })
@@ -417,4 +418,25 @@ test('run-now forwards the manual run mode and rejects unknown modes', async () 
   assert.equal(rejected.ok, false)
   assert.equal(rejected.error.code, 'bad-request')
   assert.equal(calls.length, 2)
+})
+
+
+test('resolution endpoints forward workspace scope and cancellation through loopback RPC', async () => {
+  let handler: ((endpoint: string, payload: unknown, signal: AbortSignal) => Promise<unknown>) | undefined
+  const calls: unknown[] = []
+  const ctx = { connection: { rpc: { handle: (_channel: string, callback: typeof handler, options: unknown) => {
+    assert.deepEqual(options, { authority: 'loopback' }); handler = callback; return async () => {}
+  } } } }
+  const service = Object.fromEntries(['readRun', 'confirmRun', 'retryRun'].map(method => [method,
+    async (scope: unknown, runId: string, signal: AbortSignal) => { calls.push([method, scope, runId, signal]); return { id: runId } },
+  ]))
+  registerAutomationRpc(ctx as never, service as never)
+  const signal = new AbortController().signal
+  for (const [endpoint, method] of [['read-run', 'readRun'], ['confirm-run', 'confirmRun'], ['retry-run', 'retryRun']]) {
+    assert.deepEqual(await handler!(endpoint!, { sessionId: 'source', runId: 'r' }, signal), { ok: true, value: { runId: 'r' } })
+    assert.deepEqual(calls.at(-1), [method, { sessionId: 'source', creatorKind: 'web' }, 'r', signal])
+    const result = await handler!(endpoint!, { sessionId: 'source', runId: 'r' }, AbortSignal.abort()) as { ok: boolean }
+    assert.equal(result.ok, false)
+  }
+  assert.equal(calls.length, 3)
 })

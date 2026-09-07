@@ -126,7 +126,7 @@ function errorResult(
     }
   }
   const message = error instanceof Error ? error.message : String(error)
-  const badRequest = /must|required|unknown automation|another workspace|scheduled in the future|already has a queued or running run|still queued or running|has no Session|not registered|requires a live source session|requires an explicit provider|requires a pinned provider|has no workspace|request was cancelled|changed since it was read|changed since it was opened/.test(message)
+  const badRequest = /Only a problem run|Only a terminal problem run|Wait for the active run|must|required|unknown automation|another workspace|scheduled in the future|already has a queued or running run|still queued or running|has no Session|not registered|requires a live source session|requires an explicit provider|requires a pinned provider|has no workspace|request was cancelled|changed since it was read|changed since it was opened/.test(message)
   return {
     ok: false,
     error: {
@@ -186,6 +186,11 @@ async function snapshotValue(service: AutomationService, payload: Record<string,
       ...(run.summary === null ? {} : { summary: run.summary }),
       ...(run.error === null ? {} : { error: run.error.message }),
       unread: run.unread,
+      needsAttention: run.reviewedAt == null && ['failed', 'skipped', 'cancelled'].includes(run.status),
+      ...(run.reviewedAt == null ? {} : { reviewedAt: run.reviewedAt }),
+      ...(run.resolution === undefined ? {} : { resolution: run.resolution }),
+      ...(run.retryOfRunId === undefined ? {} : { retryOfRunId: run.retryOfRunId }),
+      ...(run.retryScheduledFor === undefined ? {} : { retryScheduledFor: run.retryScheduledFor }),
       // Durable re-add source: the prompt and model/permission target captured
       // when the run started, so a deleted automation can still be rebuilt.
       promptSnapshot: run.promptSnapshot,
@@ -196,6 +201,7 @@ async function snapshotValue(service: AutomationService, payload: Record<string,
     })),
     ...(snapshot.attentionCount === undefined ? {} : { attentionCount: snapshot.attentionCount }),
     settings: service.settings(),
+    runResolutionSupported: true,
     serverNow: snapshot.generatedAt,
   }
 }
@@ -290,6 +296,18 @@ export function registerAutomationRpc(ctx: RpcContext, service: AutomationServic
         case 'mark-read': {
           const run = await service.markRead(scopeOf(payload), string(payload.runId, 'runId'), signal)
           return { ok: true, value: { runId: run.id, unread: run.unread } }
+        }
+        case 'read-run': {
+          const run = await service.readRun(scopeOf(payload), string(payload.runId, 'runId'), signal)
+          return { ok: true, value: { runId: run.id } }
+        }
+        case 'confirm-run': {
+          const run = await service.confirmRun(scopeOf(payload), string(payload.runId, 'runId'), signal)
+          return { ok: true, value: { runId: run.id } }
+        }
+        case 'retry-run': {
+          const run = await service.retryRun(scopeOf(payload), string(payload.runId, 'runId'), signal)
+          return { ok: true, value: { runId: run.id } }
         }
         case 'archive-run': {
           const run = await service.archiveRun(scopeOf(payload), string(payload.runId, 'runId'), signal)

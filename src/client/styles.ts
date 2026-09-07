@@ -122,7 +122,6 @@ const CSS_TEXT = String.raw`
 
 .dsh-automation-cal-count--attention{background:var(--dsw-alias-state-error-secondary);color:var(--dsw-alias-state-error-primary)}
 .dsh-automation-task-error{margin:8px 0;color:var(--dsw-alias-state-error-primary);font-size:12px;line-height:1.5;overflow-wrap:anywhere}
-.dsh-automation-task-counts{font-size:12px;line-height:18px;white-space:nowrap}
 .dsh-automation-cal-count--paused{background:var(--dsw-alias-bg-layer-3);color:var(--dsw-alias-label-secondary)}.dsh-automation-cal-count--executed{background:var(--dsw-alias-bg-layer-3);color:var(--dsw-alias-label-tertiary)}
 .dsh-automation-cal-month{display:block;margin-bottom:14px}
 .dsh-automation-cal-month-weekdays{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:6px;margin-bottom:6px}

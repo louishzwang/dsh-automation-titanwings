@@ -6,7 +6,7 @@ export interface CalendarTask extends AutomationViewModel {
   readonly calendarDate?: string
   readonly calendarStatus?: AutomationRunStatus
 }
-export type CalendarTaskKind = 'active' | 'paused' | 'executed' | 'attention' | 'running'
+export type CalendarTaskKind = 'active' | 'paused' | 'executed' | 'attention' | 'running' | 'ignored'
 const PROBLEM_STATUSES = new Set<AutomationRunStatus>(['failed', 'interrupted', 'skipped', 'cancelled'])
 
 export function calendarDateKey(iso: string | Date | undefined): string | undefined {
@@ -25,7 +25,7 @@ export function isUnverifiedRun(run: AutomationRunViewModel | undefined): boolea
 export function calendarTaskKind(task: CalendarTask): CalendarTaskKind {
   const status = calendarTaskStatus(task)
   if (status === 'queued' || status === 'running') return 'running'
-  if (status !== undefined && PROBLEM_STATUSES.has(status)) return 'attention'
+  if (status !== undefined && PROBLEM_STATUSES.has(status)) return task.calendarRun?.needsAttention === false ? 'ignored' : 'attention'
   if (task.calendarDate !== undefined && status === 'succeeded'
     && calendarDateKey(task.nextRunAt) !== task.calendarDate) return 'executed'
   if (isFulfilledAutomation(task)) return 'executed'
@@ -58,7 +58,7 @@ export function buildTaskCalendar(
     if (definition === undefined) continue // Explicitly deleted definitions stay deleted.
     const previous = latest.get(run.automationId)
     if (previous === undefined || newer(run, previous)) latest.set(run.automationId, run)
-    put(calendarDateKey(run.scheduledFor), { ...definition, calendarRun: run })
+    put(calendarDateKey(run.retryScheduledFor ?? run.scheduledFor), { ...definition, calendarRun: run })
   }
   for (const definition of automations) {
     // Older/truncated snapshots still expose the latest status on the definition.
@@ -84,7 +84,7 @@ export function buildTaskCalendar(
   }
 }
 export function calendarCounts(tasks: readonly CalendarTask[]): Record<CalendarTaskKind, number> {
-  const counts = { active: 0, paused: 0, executed: 0, attention: 0, running: 0 }
+  const counts = { active: 0, paused: 0, executed: 0, attention: 0, running: 0, ignored: 0 }
   for (const task of tasks) counts[calendarTaskKind(task)] += 1
   return counts
 }

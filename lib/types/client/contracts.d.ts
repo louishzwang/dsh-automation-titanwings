@@ -15,6 +15,8 @@ export interface AutomationViewProps {
     readonly updateAutomation: AutomationRuntime['updateAutomation'];
     readonly mutateAutomation: AutomationRuntime['mutateAutomation'];
     readonly runNow: AutomationRuntime['runNow'];
+    readonly confirmRun?: AutomationRuntime['confirmRun'];
+    readonly retryRun?: AutomationRuntime['retryRun'];
     readonly markRunRead: AutomationRuntime['markRunRead'];
     readonly archiveRun: AutomationRuntime['archiveRun'];
     readonly deleteRun: AutomationRuntime['deleteRun'];
@@ -67,6 +69,8 @@ export interface ClientContext {
                 readonly updateAutomation: AutomationRuntime['updateAutomation'];
                 readonly mutateAutomation: AutomationRuntime['mutateAutomation'];
                 readonly runNow: AutomationRuntime['runNow'];
+                readonly confirmRun?: AutomationRuntime['confirmRun'];
+                readonly retryRun?: AutomationRuntime['retryRun'];
                 readonly markRunRead: AutomationRuntime['markRunRead'];
                 readonly archiveRun: AutomationRuntime['archiveRun'];
                 readonly deleteRun: AutomationRuntime['deleteRun'];

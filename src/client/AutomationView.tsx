@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
+import { RunResolutionActions } from './RunResolutionActions.js'
 import { startRefreshLoop } from './refresh-loop.js'
 import { buildTaskCalendar, calendarDateKey, calendarCounts, calendarTaskKind, calendarTaskStatus, isUnverifiedRun, type CalendarTask } from './task-calendar.js'
 import type { AutomationViewProps, Translate } from './contracts.js'
@@ -13,6 +14,7 @@ import {
   clearDraft,
   defaultFormState,
   deriveOverview,
+  runNeedsAttention,
   formatSchedule,
   formatRelativeTime,
   formStateFromAutomation,
@@ -136,7 +138,7 @@ const SORT_STORAGE: SortPreferenceStorage | undefined = resolveSortPreferenceSto
 )
 const WORKSPACE_RANGE_DEFAULT_KEY = 'dsh-automation.range-default.workspace'
 
-type BusyAction = 'create' | 'update' | 'pause' | 'resume' | 'run' | 'read' | 'delete' | 'delete-run' | 'settings'
+type BusyAction = 'confirm' | 'retry' | 'create' | 'update' | 'pause' | 'resume' | 'run' | 'read' | 'delete' | 'delete-run' | 'settings'
 type TaskView = 'today' | 'all'
 type CalendarRangeView = 'list' | 'week' | 'month'
 
@@ -934,7 +936,7 @@ interface AutomationRunDialogProps {
 export function AutomationRunDialog(props: AutomationRunDialogProps): JSX.Element {
   const { t, automation, busy, onCancel, onRun } = props
   const canAhead = automation.nextRunAt !== undefined
-  const [mode, setMode] = useState<RunNowMode>(() => calendarTaskKind(automation) === 'attention' ? 'plain' : 'ahead')
+  const [mode, setMode] = useState<RunNowMode>(() => ['attention', 'ignored'].includes(calendarTaskKind(automation)) ? 'plain' : 'ahead')
   const chosen = canAhead ? mode : 'plain'
   const submit = (event: FormEvent): void => {
     event.preventDefault()
@@ -995,6 +997,9 @@ export function AutomationRunDialog(props: AutomationRunDialogProps): JSX.Elemen
 }
 
 interface AutomationCardProps {
+  readonly onResolve?: ((runId: string, action: 'confirm' | 'retry') => void) | undefined
+  readonly onIgnore?: ((runId: string) => void) | undefined
+  readonly resolutionBusy?: boolean | undefined
   readonly automation: CalendarTask
   readonly onOpen: (runId: string, sessionId: string) => void
   readonly now: Date
@@ -1009,11 +1014,11 @@ interface AutomationCardProps {
 
 export function AutomationCard(props: AutomationCardProps): JSX.Element {
   const { automation, now, t, busyKey, confirmingDelete, onConfirmDelete, onEdit, onMutate, onRun } = props
-  const isBusy = busyKey?.endsWith(`:${automation.id}`) === true
+  const isBusy = busyKey?.endsWith(`:${automation.id}`) === true || (automation.calendarRun !== undefined && busyKey?.endsWith(`:${automation.calendarRun.id}`) === true)
   const fulfilled = calendarTaskKind(automation) === 'executed'
   const run = automation.calendarRun
   const runStatus = calendarTaskStatus(automation)
-  const problem = calendarTaskKind(automation) === 'attention'
+  const problem = ['attention', 'ignored'].includes(calendarTaskKind(automation))
   const unverified = isUnverifiedRun(run)
   const lastRunAt = run?.finishedAt ?? run?.startedAt ?? run?.scheduledFor
     ?? (automation.calendarDate !== undefined && automation.calendarStatus === undefined ? undefined : automation.lastRunAt)
@@ -1089,6 +1094,7 @@ export function AutomationCard(props: AutomationCardProps): JSX.Element {
             : <button className="dsh-automation-session-id" type="button" disabled={isBusy} onClick={() => props.onOpen(run.id, run.sessionId!)}>{t('run.openSession', { id: shortSessionId(run.sessionId) })}</button>}
         </div>
       )}
+      {run !== undefined && <RunResolutionActions run={run} t={t} busy={isBusy || props.resolutionBusy === true} onResolve={props.onResolve} onIgnore={props.onIgnore} />}
       {confirmingDelete ? (
         <div className="dsh-automation-delete-confirm">
           <div><strong>{t('card.confirmDelete')}</strong><span>{t('card.confirmDeleteHint')}</span></div>
@@ -1103,7 +1109,7 @@ export function AutomationCard(props: AutomationCardProps): JSX.Element {
             <PencilIcon />{t('card.edit')}
           </button>
           <button className="dsh-automation-button dsh-automation-button--ghost" type="button" onClick={(event) => onRun(automation, event.currentTarget.getBoundingClientRect())} disabled={isBusy}>
-            <PlayIcon />{t(problem && !unverified ? 'card.retry' : automation.lastRunAt === undefined ? 'card.runNow' : 'card.runAgain')}
+            <PlayIcon />{t(automation.lastRunAt === undefined && run === undefined ? 'card.runNow' : 'card.runAgain')}
           </button>
           {!isFulfilledAutomation(automation) && (
             <button className="dsh-automation-button dsh-automation-button--ghost" type="button" onClick={() => onMutate(automation.id, automation.status === 'active' ? 'pause' : 'resume')} disabled={isBusy}>
@@ -1120,7 +1126,10 @@ export function AutomationCard(props: AutomationCardProps): JSX.Element {
   )
 }
 
-export function RecentRun({ run, now, t, busy, automationMissing, confirmingDelete, onOpen, onMarkRead, onReadd, onConfirmDelete, onDelete }: {
+export function RecentRun({ run, now, t, busy, automationMissing, confirmingDelete, onOpen, onMarkRead, onReadd, onConfirmDelete, onDelete, onResolve, onAgain, resolutionBusy }: {
+  onResolve?: ((runId: string, action: 'confirm' | 'retry') => void) | undefined
+  onAgain?: (() => void) | undefined
+  resolutionBusy?: boolean | undefined
   run: AutomationRunViewModel
   now: Date
   t: Translate
@@ -1134,9 +1143,7 @@ export function RecentRun({ run, now, t, busy, automationMissing, confirmingDele
   onDelete: (runId: string) => void
 }): JSX.Element {
   const timestamp = run.finishedAt ?? run.startedAt ?? run.scheduledFor
-  const canMarkRead = run.unread !== false
-    && (run.status === 'failed' || run.status === 'interrupted'
-      || run.status === 'skipped' || run.status === 'cancelled')
+  const canMarkRead = onResolve === undefined && runNeedsAttention(run)
   const canDelete = run.status !== 'queued' && run.status !== 'running'
   return (
     <article className="dsh-automation-run">
@@ -1170,6 +1177,7 @@ export function RecentRun({ run, now, t, busy, automationMissing, confirmingDele
           </button>
         </div>
       )}
+      <RunResolutionActions run={run} t={t} busy={busy || resolutionBusy === true} onResolve={onResolve} onIgnore={onResolve === undefined ? undefined : onMarkRead} canRetry={!automationMissing} />
       {confirmingDelete ? (
         <div className="dsh-automation-delete-confirm dsh-automation-run-confirm">
           <div><strong>{t('run.confirmDelete')}</strong><span>{t('run.confirmDeleteHint')}</span></div>
@@ -1180,6 +1188,7 @@ export function RecentRun({ run, now, t, busy, automationMissing, confirmingDele
         </div>
       ) : (
         <div className="dsh-automation-run-actions">
+          {onAgain !== undefined && canDelete && <button className="dsh-automation-button dsh-automation-button--ghost" type="button" onClick={onAgain} disabled={busy || resolutionBusy === true}><PlayIcon />{t('card.runAgain')}</button>}
           {canMarkRead && (
             <button className="dsh-automation-button dsh-automation-button--ghost" type="button" onClick={() => onMarkRead(run.id)} disabled={busy}>
               <CheckIcon />{t('run.markRead')}
@@ -1201,7 +1210,7 @@ export function RecentRun({ run, now, t, busy, automationMissing, confirmingDele
 
 /** Native conversation view: all data and effects arrive through the slot's four shares. */
 export function AutomationView({
-  t, useAutomationState, refresh, createAutomation, updateAutomation, mutateAutomation, runNow, markRunRead,
+  t, useAutomationState, refresh, createAutomation, updateAutomation, mutateAutomation, runNow, markRunRead, confirmRun, retryRun,
   deleteRun, updateSettings, loadModelCatalog, openSession, refreshSessions,
 }: AutomationViewProps): JSX.Element {
   const state = useAutomationState(value => value)
@@ -1315,8 +1324,7 @@ export function AutomationView({
   ), [automations])
   const todayStart = useMemo(() => startOfLocalDay(now), [now])
   const taskCalendar = useMemo(() => buildTaskCalendar(automations, snapshot?.runs ?? []), [automations, snapshot?.runs])
-  const attentionTaskCount = useMemo(() => calendarCounts(taskCalendar.all).attention, [taskCalendar])
-  const runningTaskCount = useMemo(() => calendarCounts(taskCalendar.all).running, [taskCalendar])
+  const activeRunIds = useMemo(() => new Set(snapshot?.runs.filter(run => run.status === 'queued' || run.status === 'running').map(run => run.automationId)), [snapshot?.runs])
   const buildDayList = (day: Date): CalendarTask[] => {
     const tasks = taskCalendar.days.get(calendarDateKey(day)!) ?? []
     // Preserve the user's sort preference without losing the calendar metadata.
@@ -1452,6 +1460,9 @@ export function AutomationView({
   const onOpenSession = (runId: string, sessionId: string): void => {
     void perform(actionKey('run', runId), () => openSession(runId, sessionId))
   }
+  const onResolve = snapshot?.runResolutionSupported === true && confirmRun !== undefined && retryRun !== undefined
+    ? (runId: string, action: 'confirm' | 'retry'): void => { void perform(actionKey(action, runId), () => action === 'confirm' ? confirmRun(runId) : retryRun(runId)) }
+    : undefined
   const onMarkRead = (runId: string): void => {
     void perform(actionKey('read', runId), () => markRunRead(runId))
   }
@@ -1701,10 +1712,6 @@ export function AutomationView({
                   <span className="dsh-automation-status-item"><b>{t('stats.next')}</b><em>{stats?.nextRunAt === undefined ? t('stats.noneScheduled') : formatRelativeTime(stats.nextRunAt, now, t)}</em></span>
                 </div>
               </div>
-              <div className="dsh-automation-status-column dsh-automation-task-counts">
-                <span className="dsh-automation-status-item"><b>{t('stats.taskAttention')}</b><em>{attentionTaskCount}</em></span>
-                <span className="dsh-automation-status-item"><b>{t('status.running')}</b><em>{runningTaskCount}</em></span>
-              </div>
               <div className="dsh-automation-toolbar-actions">
                 <button className="dsh-automation-button dsh-automation-button--primary" type="button" onClick={toggleCreate}>
                   {showCreate ? <><PauseIcon />{t('header.closeCreate')}</> : <><PlusIcon />{t('header.create')}</>}
@@ -1834,7 +1841,10 @@ export function AutomationView({
                     onEdit={onEdit}
                     onMutate={onMutate}
                     onRun={onRun}
-                  onOpen={onOpenSession}
+                    onResolve={onResolve}
+                    onIgnore={onResolve === undefined ? undefined : onMarkRead}
+                    resolutionBusy={activeRunIds.has(automation.id)}
+                    onOpen={onOpenSession}
                   />
                 ))}
               </div>
@@ -1861,7 +1871,10 @@ export function AutomationView({
                   onEdit={onEdit}
                   onMutate={onMutate}
                   onRun={onRun}
-                    onOpen={onOpenSession}
+                  onResolve={onResolve}
+                  onIgnore={onResolve === undefined ? undefined : onMarkRead}
+                  resolutionBusy={activeRunIds.has(automation.id)}
+                  onOpen={onOpenSession}
                 />
               ))}
             </div>
@@ -1901,10 +1914,14 @@ export function AutomationView({
                       t={t}
                       busy={busyKey === actionKey('run', run.id)
                         || busyKey === actionKey('delete-run', run.id)
-                        || busyKey === actionKey('read', run.id)}
+                        || busyKey === actionKey('read', run.id)
+                        || busyKey === actionKey('confirm', run.id) || busyKey === actionKey('retry', run.id)}
                       automationMissing={automationMissing}
                       confirmingDelete={confirmDeleteRunId === run.id}
                       onOpen={onOpenSession}
+                      onResolve={onResolve}
+                      resolutionBusy={activeRunIds.has(run.automationId)}
+                      onAgain={automationMissing ? undefined : () => onRun(automations.find(item => item.id === run.automationId)!)}
                       onMarkRead={onMarkRead}
                       onReadd={onReaddRun}
                       onConfirmDelete={setConfirmDeleteRunId}

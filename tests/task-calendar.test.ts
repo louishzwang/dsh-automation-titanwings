@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { AutomationCard, AutomationRunDialog, AutomationView } from '../src/client/AutomationView.js'
+import { AutomationCard, AutomationRunDialog, AutomationView, RecentRun } from '../src/client/AutomationView.js'
 import { buildTaskCalendar, calendarDateKey, calendarCounts, calendarTaskKind, calendarTaskStatus } from '../src/client/task-calendar.js'
 import { zh } from '../src/client/locales.js'
 import type { AutomationRunViewModel, AutomationViewModel } from '../src/client/protocol.js'
@@ -136,8 +136,60 @@ test('the actual task view counts and renders a failed task instead of an empty 
   }))
   const taskColumn = html.split('<aside')[0]!
   assert.match(taskColumn, /今日任务<\/span><b>1<\/b>/)
-  assert.match(taskColumn, /需关注<\/b><em>1<\/em>/)
+  assert.doesNotMatch(taskColumn, /需关注<\/b><em>|运行中<\/b><em>/)
   assert.match(taskColumn, /结果待核实/)
   assert.match(taskColumn, /dsh-automation-card-list/)
   assert.doesNotMatch(taskColumn, /今天没有待执行的任务/)
+})
+
+
+test('ignoring a reminder keeps the failed card but removes its calendar attention count', () => {
+  const ignored = run({ needsAttention: false, unread: false })
+  const calendar = buildTaskCalendar([task()], [ignored])
+  assert.equal(dayTasks(calendar, 5).length, 1)
+  assert.equal(calendarCounts(dayTasks(calendar, 5)).attention, 0)
+  assert.equal(calendarCounts(dayTasks(calendar, 5)).executed, 0)
+  assert.equal(calendarTaskStatus(dayTasks(calendar, 5)[0]!), 'failed')
+})
+
+test('cross-day linked retries resolve the original calendar day without duplicating tasks', () => {
+  for (const status of ['succeeded', 'failed', 'running'] as const) {
+    const retry = run({ id: 'retry', status, scheduledFor: at(7), startedAt: at(7), finishedAt: at(7, 10), retryOfRunId: 'r', retryScheduledFor: at(5) })
+    const calendar = buildTaskCalendar([task({ lastRunStatus: status, lastRunAt: at(7, 10) })], [run(), retry])
+    assert.equal(dayTasks(calendar, 5).length, 1)
+    assert.equal(dayTasks(calendar, 7).length, 0)
+    assert.equal(calendarTaskStatus(dayTasks(calendar, 5)[0]!), status)
+    assert.equal(calendarCounts(dayTasks(calendar, 5))[status === 'succeeded' ? 'executed' : status === 'failed' ? 'attention' : 'running'], 1)
+  }
+})
+
+
+test('task and history cards share resolution actions and retain audit after confirmation', () => {
+  const noop = () => {}
+  const t = (key: keyof typeof zh) => zh[key]
+  const history = run({ error: 'events is not iterable', needsAttention: true })
+  const renderHistory = (row: AutomationRunViewModel, deleted = false) => renderToStaticMarkup(createElement(RecentRun, {
+    run: row, now: new Date(at(7)), t, busy: false, automationMissing: deleted, confirmingDelete: false,
+    onOpen: noop, onMarkRead: noop, onReadd: noop, onConfirmDelete: noop, onDelete: noop, onResolve: noop, onAgain: noop,
+  }))
+  const card = renderToStaticMarkup(createElement(AutomationCard, {
+    automation: { ...task(), calendarRun: history }, now: new Date(at(7)), t, busyKey: undefined,
+    confirmingDelete: false, onConfirmDelete: noop, onEdit: noop, onMutate: noop, onRun: noop, onOpen: noop,
+    onResolve: noop, onIgnore: noop,
+  }))
+  for (const html of [card, renderHistory(history)]) {
+    assert.match(html, />确认无误<|>重试</)
+    assert.match(html, />忽略提醒</)
+    assert.match(html, />再次执行</)
+  }
+  assert.doesNotMatch(renderHistory(history, true), />重试</)
+  const ignored = renderHistory({ ...history, unread: false, needsAttention: false })
+  assert.match(ignored, /已忽略提醒，原状态保留/)
+  assert.doesNotMatch(ignored, />忽略提醒</)
+  assert.match(ignored, />确认无误</)
+  const confirmed = renderHistory({ ...history, status: 'succeeded', needsAttention: false,
+    resolution: { kind: 'confirmed', at: at(7), previousStatus: 'failed', previousError: { code: 'fixture', message: 'events is not iterable' } } })
+  assert.match(confirmed, /已人工确认无误/)
+  assert.match(confirmed, /events is not iterable/)
+  assert.doesNotMatch(confirmed, />确认无误<|>重试<|>忽略提醒</)
 })

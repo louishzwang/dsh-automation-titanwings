@@ -111,6 +111,14 @@ export const automationRunSchema: z.ZodType<AutomationRun> = z.object({
   error: z.object({ code: nonBlank, message: nonBlank }).nullable(),
   unread: z.boolean(),
   reviewedAt: instant.nullable().optional(),
+  retryOfRunId: nonBlank.optional(),
+  retryScheduledFor: instant.optional(),
+  resolution: z.object({
+    kind: z.enum(['confirmed', 'retry']), at: instant,
+    previousStatus: z.enum(['failed', 'skipped', 'cancelled']),
+    previousError: z.object({ code: nonBlank, message: nonBlank }).nullable(),
+    retryRunId: nonBlank.optional(),
+  }).optional(),
   replacesScheduledFor: instant.nullable().optional(),
 })
 

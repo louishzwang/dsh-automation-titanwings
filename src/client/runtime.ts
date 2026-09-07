@@ -41,6 +41,8 @@ export interface AutomationRuntime {
   mutateAutomation(automationId: string, mutation: MutateRequest['mutation']): Promise<void>
   runNow(automationId: string, mode: RunNowMode): Promise<void>
   markRunRead(runId: string): Promise<void>
+  confirmRun(runId: string): Promise<void>
+  retryRun(runId: string): Promise<void>
   archiveRun(runId: string): Promise<void>
   deleteRun(runId: string): Promise<void>
   updateSettings(settings: SettingsUpdateInput): Promise<void>
@@ -205,6 +207,8 @@ export function createAutomationRuntime(rpc: ClientRpc, sessionId: string): Auto
       await mutateThenRefresh('run-now', payload)
     },
     markRunRead,
+    async confirmRun(runId) { await mutateThenRefresh('confirm-run', { sessionId, runId }) },
+    async retryRun(runId) { await mutateThenRefresh('retry-run', { sessionId, runId }) },
     archiveRun,
     deleteRun,
     async updateSettings(settings) {
@@ -215,7 +219,9 @@ export function createAutomationRuntime(rpc: ClientRpc, sessionId: string): Auto
       // A failed navigation must leave the run unread so it still asks for
       // attention. Mark it only after the destination Session is available.
       await open()
-      await markRunRead(runId)
+      if (source.getSnapshot().snapshot?.runResolutionSupported === true) {
+        await mutateThenRefresh('read-run', { sessionId, runId })
+      } else await markRunRead(runId)
     },
   }
 }

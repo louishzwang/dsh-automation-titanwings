@@ -169,6 +169,7 @@ export class AutomationService {
       service.definitions = domain.table('definitions') as KvTable<string, AutomationDefinition>
       service.runs = domain.table('runs') as KvTable<string, AutomationRun>
       await service.recoverInterruptedRuns()
+      await service.reconcileSuccessfulRetries()
       await service.flagLegacyProblemRuns()
       await service.archiveTerminalRunSessions()
       await service.pruneAllHistory()
@@ -233,7 +234,7 @@ export class AutomationService {
         related.push(run)
         relatedById.set(run.automationId, related)
       }
-      const needsAttention = (run: AutomationRun): boolean => run.unread
+      const needsAttention = (run: AutomationRun): boolean => run.reviewedAt == null
         && (run.status === 'failed' || run.status === 'skipped' || run.status === 'cancelled')
       const attentionCount = workspaceRuns.filter(needsAttention).length
       const archivedSessionIds = new Set(this.ctx.workspaceRegistry.archivedSessionIds.map(String))
@@ -397,22 +398,105 @@ export class AutomationService {
 
   async markRead(scope: AutomationScope, runId: string, signal?: AbortSignal): Promise<AutomationRun> {
     return this.serialize(async () => {
-      const run = this.runs.get(runId)
-      if (run === undefined) throw new Error(`unknown automation run '${runId}'`)
-      const { workspace } = await this.resolveScope(scope)
-      throwIfCancelled(signal)
-      if (run.targetSnapshot.workspaceId !== workspace.id) {
-        throw new Error('The automation run belongs to another workspace.')
-      }
-      if (!run.unread) return run
+      const run = await this.ownedRun(scope, runId, signal)
+      if (!run.unread && run.reviewedAt != null) return run
       const next = {
         ...run,
         unread: false,
-        ...(run.reviewedAt === undefined ? { reviewedAt: toIso() } : {}),
+        ...(run.reviewedAt == null ? { reviewedAt: toIso() } : {}),
       }
       await this.runs.put(runId, next)
       return next
     }, signal)
+  }
+
+  /** Explicitly acknowledge a result without executing any Agent. */
+  async confirmRun(scope: AutomationScope, runId: string, signal?: AbortSignal): Promise<AutomationRun> {
+    const result = await this.serialize(async () => {
+      const run = await this.ownedRun(scope, runId, signal)
+      if (this.relatedRuns(run.automationId).some(item => item.status === 'queued' || item.status === 'running')) {
+        throw new Error('Wait for the active run to finish before confirming its result.')
+      }
+      await this.settleProblemRun(run, 'confirmed')
+      await this.reconcileSuccessfulRetries()
+      return this.runs.get(runId)!
+    }, signal)
+    this.requestPump()
+    return result
+  }
+
+  /** Retry the immutable failed input, linked to its original occurrence. */
+  async retryRun(scope: AutomationScope, runId: string, signal?: AbortSignal): Promise<AutomationRun> {
+    const result = await this.serialize(async () => {
+      const previous = await this.ownedRun(scope, runId, signal)
+      if (!['failed', 'skipped', 'cancelled'].includes(previous.status)) throw new Error('Only a problem run can be retried.')
+      const definition = await this.ownedDefinition(scope, previous.automationId)
+      throwIfCancelled(signal)
+      if (this.relatedRuns(definition.id).some(item => item.status === 'queued' || item.status === 'running')) {
+        throw new Error('The automation already has a queued or running run.')
+      }
+      const value: AutomationRun = {
+        ...createManualRun(definition, toIso()), retryOfRunId: previous.id,
+        retryScheduledFor: previous.retryScheduledFor ?? previous.scheduledFor,
+        promptSnapshot: previous.promptSnapshot, targetSnapshot: previous.targetSnapshot,
+      }
+      await this.runs.put(value.id, value)
+      return value
+    }, signal)
+    this.requestPump()
+    return result
+  }
+
+  /** Reading a conversation does not dismiss an unresolved problem. */
+  async readRun(scope: AutomationScope, runId: string, signal?: AbortSignal): Promise<AutomationRun> {
+    return this.serialize(async () => {
+      const run = await this.ownedRun(scope, runId, signal)
+      if (!run.unread) return run
+      const next = { ...run, unread: false }
+      await this.runs.put(runId, next)
+      return next
+    }, signal)
+  }
+
+  private async ownedRun(scope: AutomationScope, runId: string, signal?: AbortSignal): Promise<AutomationRun> {
+    const { workspace } = await this.resolveScope(scope)
+    throwIfCancelled(signal)
+    // Execution can finish while resolving the workspace; never write an old status back.
+    const run = this.runs.get(runId)
+    if (run === undefined) throw new Error(`unknown automation run '${runId}'`)
+    if (run.targetSnapshot.workspaceId !== workspace.id) throw new Error('The automation run belongs to another workspace.')
+    return run
+  }
+
+  private async settleProblemRun(run: AutomationRun, kind: 'confirmed' | 'retry', retryRunId?: string): Promise<void> {
+    if (run.status === 'succeeded') return
+    if (run.status !== 'failed' && run.status !== 'skipped' && run.status !== 'cancelled') {
+      throw new Error('Only a terminal problem run can be confirmed.')
+    }
+    const at = toIso()
+    await this.runs.put(run.id, {
+      ...run, status: 'succeeded', error: null, unread: false, reviewedAt: at,
+      resolution: { kind, at, previousStatus: run.status, previousError: run.error,
+        ...(retryRunId === undefined ? {} : { retryRunId }) },
+    })
+  }
+
+  /** Idempotent repair also finishes a retry whose parent write was interrupted. */
+  private async reconcileSuccessfulRetries(): Promise<void> {
+    for (const [, child] of this.runs.entries()) {
+      if (child.status !== 'succeeded' || child.retryOfRunId === undefined) continue
+      let parentId: string | undefined = child.retryOfRunId
+      const seen = new Set([child.id])
+      while (parentId !== undefined && !seen.has(parentId)) {
+        seen.add(parentId)
+        const parent = this.runs.get(parentId)
+        if (parent === undefined || parent.automationId !== child.automationId
+          || parent.targetSnapshot.workspaceId !== child.targetSnapshot.workspaceId) break
+        if (parent.status === 'queued' || parent.status === 'running') break
+        await this.settleProblemRun(parent, 'retry', child.id)
+        parentId = parent.retryOfRunId
+      }
+    }
   }
 
   /** Archive the Session of one run so it leaves every conversation-list grouping surface. */
@@ -763,6 +847,10 @@ export class AutomationService {
       unread: true,
     }
     await this.runs.put(run.id, completed)
+    if (!this.stopping && completed.status === 'succeeded' && completed.retryOfRunId !== undefined) {
+      try { await this.serialize(() => this.reconcileSuccessfulRetries()) }
+      catch (error) { this.ctx.logger.warn(`dsh-automation: retry result saved; parent reconciliation deferred: ${asMessage(error)}`) }
+    }
     await this.archiveRunSession(completed)
     await this.pruneAfterExecution(run.targetSnapshot.workspaceId)
   }
@@ -860,6 +948,9 @@ export class AutomationService {
 
   /** Keep every active record plus the configured newest terminal records per automation. */
   private async pruneWorkspaceHistory(workspaceId: string): Promise<void> {
+    const retryParents = new Set([...this.runs.entries()].map(([, run]) => run)
+      .filter(run => run.retryOfRunId !== undefined && this.runs.get(run.retryOfRunId)?.status !== 'succeeded')
+      .map(run => run.retryOfRunId))
     const terminalByAutomation = new Map<string, AutomationRun[]>()
     for (const run of [...this.runs.entries()]
       .map(([, run]) => run)
@@ -872,7 +963,7 @@ export class AutomationService {
     }
     for (const terminal of terminalByAutomation.values()) {
       terminal.sort(compareRuns)
-      const removed = terminal.slice(this.config.historyLimit)
+      const removed = terminal.slice(this.config.historyLimit).filter(run => !retryParents.has(run.id))
       await this.retainOccurrenceReceipts(removed)
       for (const run of removed) await this.runs.delete(run.id)
     }

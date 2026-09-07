@@ -3,6 +3,7 @@ import type { AutomationLocaleKey } from './locales.js'
 import type {
   AutomationSchedule,
   AutomationRunStatus,
+  AutomationRunViewModel,
   AutomationSnapshot,
   AutomationViewModel,
   CreateAutomationInput,
@@ -316,6 +317,10 @@ export function reasoningEffortChoices(
 }
 
 /** Problem statuses that count as needs-action until the user marks them reviewed. */
+export function runNeedsAttention(run: AutomationRunViewModel): boolean {
+  return ATTENTION_STATUSES.has(run.status) && (run.needsAttention ?? (run.unread !== false))
+}
+
 const ATTENTION_STATUSES = new Set<AutomationRunStatus>(['failed', 'interrupted', 'skipped', 'cancelled'])
 
 export interface OverviewStats {
@@ -436,7 +441,7 @@ export function deriveOverview(snapshot: AutomationSnapshot): OverviewStats {
   return {
     total: snapshot.automations.length,
     active: snapshot.automations.filter(item => item.status === 'active').length,
-    attention: snapshot.attentionCount ?? snapshot.runs.filter(run => ATTENTION_STATUSES.has(run.status) && run.unread !== false).length,
+    attention: snapshot.attentionCount ?? snapshot.runs.filter(runNeedsAttention).length,
     ...(next === undefined ? {} : { nextRunAt: next }),
   }
 }

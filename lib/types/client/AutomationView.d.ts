@@ -38,6 +38,9 @@ interface AutomationRunDialogProps {
 /** Ask how a manual run should treat the pending schedule: replace it or leave it. */
 export declare function AutomationRunDialog(props: AutomationRunDialogProps): JSX.Element;
 interface AutomationCardProps {
+    readonly onResolve?: ((runId: string, action: 'confirm' | 'retry') => void) | undefined;
+    readonly onIgnore?: ((runId: string) => void) | undefined;
+    readonly resolutionBusy?: boolean | undefined;
     readonly automation: CalendarTask;
     readonly onOpen: (runId: string, sessionId: string) => void;
     readonly now: Date;
@@ -50,7 +53,10 @@ interface AutomationCardProps {
     readonly onRun: (automation: AutomationViewModel, anchor?: DOMRect) => void;
 }
 export declare function AutomationCard(props: AutomationCardProps): JSX.Element;
-export declare function RecentRun({ run, now, t, busy, automationMissing, confirmingDelete, onOpen, onMarkRead, onReadd, onConfirmDelete, onDelete }: {
+export declare function RecentRun({ run, now, t, busy, automationMissing, confirmingDelete, onOpen, onMarkRead, onReadd, onConfirmDelete, onDelete, onResolve, onAgain, resolutionBusy }: {
+    onResolve?: ((runId: string, action: 'confirm' | 'retry') => void) | undefined;
+    onAgain?: (() => void) | undefined;
+    resolutionBusy?: boolean | undefined;
     run: AutomationRunViewModel;
     now: Date;
     t: Translate;
@@ -64,5 +70,5 @@ export declare function RecentRun({ run, now, t, busy, automationMissing, confir
     onDelete: (runId: string) => void;
 }): JSX.Element;
 /** Native conversation view: all data and effects arrive through the slot's four shares. */
-export declare function AutomationView({ t, useAutomationState, refresh, createAutomation, updateAutomation, mutateAutomation, runNow, markRunRead, deleteRun, updateSettings, loadModelCatalog, openSession, refreshSessions, }: AutomationViewProps): JSX.Element;
+export declare function AutomationView({ t, useAutomationState, refresh, createAutomation, updateAutomation, mutateAutomation, runNow, markRunRead, confirmRun, retryRun, deleteRun, updateSettings, loadModelCatalog, openSession, refreshSessions, }: AutomationViewProps): JSX.Element;
 export {};

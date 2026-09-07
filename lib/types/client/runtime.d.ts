@@ -19,6 +19,8 @@ export interface AutomationRuntime {
     mutateAutomation(automationId: string, mutation: MutateRequest['mutation']): Promise<void>;
     runNow(automationId: string, mode: RunNowMode): Promise<void>;
     markRunRead(runId: string): Promise<void>;
+    confirmRun(runId: string): Promise<void>;
+    retryRun(runId: string): Promise<void>;
     archiveRun(runId: string): Promise<void>;
     deleteRun(runId: string): Promise<void>;
     updateSettings(settings: SettingsUpdateInput): Promise<void>;

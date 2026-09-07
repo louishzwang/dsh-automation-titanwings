@@ -83,6 +83,20 @@ export interface AutomationRunViewModel {
     readonly summary?: string;
     readonly error?: string;
     readonly unread?: boolean;
+    readonly needsAttention?: boolean;
+    readonly reviewedAt?: string;
+    readonly retryOfRunId?: string;
+    readonly retryScheduledFor?: string;
+    readonly resolution?: {
+        readonly kind: 'confirmed' | 'retry';
+        readonly at: string;
+        readonly previousStatus: AutomationRunStatus;
+        readonly previousError: {
+            readonly code: string;
+            readonly message: string;
+        } | null;
+        readonly retryRunId?: string;
+    };
     readonly promptSnapshot?: string;
     readonly provider?: string | null;
     readonly model?: string | null;
@@ -104,6 +118,7 @@ export interface AutomationSnapshot {
     readonly runs: readonly AutomationRunViewModel[];
     readonly settings?: AutomationSettingsView;
     readonly attentionCount?: number;
+    readonly runResolutionSupported?: boolean;
     readonly serverNow: string;
 }
 export interface CreateAutomationInput {

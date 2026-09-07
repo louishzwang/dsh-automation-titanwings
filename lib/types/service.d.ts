@@ -110,6 +110,16 @@ export declare class AutomationService {
         readonly replaceNext?: boolean;
     }, signal?: AbortSignal): Promise<AutomationRun>;
     markRead(scope: AutomationScope, runId: string, signal?: AbortSignal): Promise<AutomationRun>;
+    /** Explicitly acknowledge a result without executing any Agent. */
+    confirmRun(scope: AutomationScope, runId: string, signal?: AbortSignal): Promise<AutomationRun>;
+    /** Retry the immutable failed input, linked to its original occurrence. */
+    retryRun(scope: AutomationScope, runId: string, signal?: AbortSignal): Promise<AutomationRun>;
+    /** Reading a conversation does not dismiss an unresolved problem. */
+    readRun(scope: AutomationScope, runId: string, signal?: AbortSignal): Promise<AutomationRun>;
+    private ownedRun;
+    private settleProblemRun;
+    /** Idempotent repair also finishes a retry whose parent write was interrupted. */
+    private reconcileSuccessfulRetries;
     /** Archive the Session of one run so it leaves every conversation-list grouping surface. */
     archiveRun(scope: AutomationScope, runId: string, signal?: AbortSignal): Promise<AutomationRun>;
     /** Delete one durable run record while retaining its Session and any definition. */

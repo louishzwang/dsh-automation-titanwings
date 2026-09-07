@@ -1,5 +1,5 @@
 import type { Translate } from './contracts.js';
-import type { AutomationSchedule, AutomationSnapshot, AutomationViewModel, CreateAutomationInput, ModelCatalog, ModelReasoningEffort, UpdateAutomationInput } from './protocol.js';
+import type { AutomationSchedule, AutomationRunViewModel, AutomationSnapshot, AutomationViewModel, CreateAutomationInput, ModelCatalog, ModelReasoningEffort, UpdateAutomationInput } from './protocol.js';
 export type ScheduleKind = 'once' | 'interval' | 'daily' | 'weekly';
 export interface DayAutomationCounts {
     readonly active: number;
@@ -52,6 +52,8 @@ export interface ReasoningEffortChoice extends ModelReasoningEffort {
 }
 /** Use exact-model opaque effort ids and retain an unavailable current pin. */
 export declare function reasoningEffortChoices(catalog: ModelCatalog, provider: string | null, model: string | null, currentEffort: string | null): readonly ReasoningEffortChoice[];
+/** Problem statuses that count as needs-action until the user marks them reviewed. */
+export declare function runNeedsAttention(run: AutomationRunViewModel): boolean;
 export interface OverviewStats {
     readonly total: number;
     readonly active: number;

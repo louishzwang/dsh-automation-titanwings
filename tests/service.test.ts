@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { createDefinition, createManualRun, createScheduledRun } from '../src/domain.ts'
+import { automationRunSchema, createDefinition, createManualRun, createScheduledRun } from '../src/domain.ts'
 import { AutomationService, type AutomationConfig } from '../src/service.ts'
 import type { AutomationDefinition, AutomationRun } from '../src/types.ts'
 
@@ -1405,4 +1405,129 @@ test('snapshot keeps active and unread problems outside the ordinary history lim
   assert.equal(second.attentionCount, 0)
   assert.deepEqual(second.runs.map(r => r.id), [success.id, active.id])
   await h.service.dispose()
+})
+
+
+function failedResult(d: AutomationDefinition, id = 'problem'): AutomationRun {
+  return { ...createScheduledRun(d, '2026-08-13T09:00:00.000Z'), id,
+    status: 'failed', startedAt: '2026-08-13T09:00:00.000Z', finishedAt: '2026-08-13T09:01:00.000Z',
+    error: { code: 'fixture', message: 'events is not iterable' }, unread: true }
+}
+
+test('reading, ignoring and confirming are separate operations with durable audit', async () => {
+  const d = storedDefinition('2026-08-13T00:00:00Z')
+  const original = failedResult(d)
+  const { service, domain } = await harness({ definitions: [d], runs: [original] })
+  try {
+    await service.readRun(scope, original.id)
+    assert.equal(domain.runs.get(original.id)?.unread, false)
+    assert.equal((await service.snapshot(scope)).attentionCount, 1)
+    await service.markRead(scope, original.id)
+    assert.equal((await service.snapshot(scope)).attentionCount, 0)
+    assert.equal(domain.runs.get(original.id)?.status, 'failed')
+    const confirmed = await service.confirmRun(scope, original.id)
+    assert.equal(confirmed.status, 'succeeded')
+    assert.equal(confirmed.finishedAt, original.finishedAt)
+    assert.equal(confirmed.error, null)
+    assert.equal(confirmed.resolution?.kind, 'confirmed')
+    assert.deepEqual(confirmed.resolution?.previousError, original.error)
+    assert.equal((await service.snapshot(scope)).definitions[0]?.lastRun?.status, 'succeeded')
+    assert.deepEqual(await service.confirmRun(scope, original.id), confirmed)
+    assert.deepEqual(automationRunSchema.parse(confirmed), confirmed)
+    assert.deepEqual(automationRunSchema.parse(original), original)
+    assert.equal(domain.runs.size, 1)
+  } finally { await service.dispose() }
+})
+
+test('resolution mutations enforce workspace ownership, cancellation and active-run guards', async () => {
+  const d = storedDefinition('2026-08-13T00:00:00Z')
+  const original = failedResult(d)
+  const { service, domain } = await harness({ definitions: [d], runs: [original] })
+  try {
+    for (const method of ['readRun', 'confirmRun', 'retryRun'] as const) {
+      await assert.rejects(service[method](otherWorkspaceScope, original.id), /another workspace/)
+      await assert.rejects(service[method](scope, original.id, AbortSignal.abort()), /cancelled/)
+    }
+    assert.equal(domain.runs.get(original.id)?.status, 'failed')
+    const retry = await service.retryRun(scope, original.id)
+    await assert.rejects(service.retryRun(scope, original.id), /queued or running/)
+    await assert.rejects(service.confirmRun(scope, original.id), /active run/)
+    await assert.rejects(service.confirmRun(scope, retry.id), /active run/)
+  } finally { await service.dispose() }
+})
+
+test('linked retry uses original inputs and date while preserving the future schedule', async () => {
+  const originalDefinition = storedDefinition('2026-08-13T00:00:00Z')
+  const original = failedResult(originalDefinition)
+  const d = { ...originalDefinition, revision: 2, prompt: 'New input must not replace the failed input.' }
+  const { service, domain } = await harness({ definitions: [d], runs: [original] })
+  try {
+    const next = (await service.snapshot(scope)).definitions[0]?.nextRunAt
+    const retry = await service.retryRun(scope, original.id)
+    assert.equal(retry.retryOfRunId, original.id)
+    assert.equal(retry.retryScheduledFor, original.scheduledFor)
+    assert.equal(retry.promptSnapshot, original.promptSnapshot)
+    assert.deepEqual(retry.targetSnapshot, original.targetSnapshot)
+    assert.equal(retry.replacesScheduledFor, null)
+    assert.equal((await service.snapshot(scope)).definitions[0]?.nextRunAt, next)
+    assert.equal(domain.runs.get(original.id)?.status, 'failed')
+    assert.deepEqual(automationRunSchema.parse(retry), retry)
+  } finally { await service.dispose() }
+})
+
+test('successful retry resolves the original and failed retry keeps it actionable', async () => {
+  for (const completeRuns of [true, false]) {
+    const d = storedDefinition(new Date().toISOString())
+    const original = failedResult(d)
+    const { service, domain } = await harness({ definitions: [d], runs: [original], completeRuns, config: { maxConcurrentRuns: 1 } })
+    try {
+      const retry = await service.retryRun(scope, original.id)
+      service.start()
+      await waitFor(() => ['failed', 'succeeded'].includes(domain.runs.get(retry.id)?.status ?? ''))
+      await flushMicrotasks(100)
+      assert.equal(domain.runs.get(retry.id)?.status, completeRuns ? 'succeeded' : 'failed')
+      assert.equal(domain.runs.get(original.id)?.status, completeRuns ? 'succeeded' : 'failed')
+      assert.equal((await service.snapshot(scope)).attentionCount, completeRuns ? 0 : 2)
+      if (completeRuns) assert.equal(domain.runs.get(original.id)?.resolution?.retryRunId, retry.id)
+    } finally { await service.dispose() }
+  }
+})
+
+test('startup completes a saved retry chain and keeps unresolved parents through retention', async () => {
+  const d = storedDefinition('2026-08-13T00:00:00Z')
+  const parent = failedResult(d)
+  const child = { ...failedResult(d, 'child'), scheduledFor: '2026-08-14T09:00:00.000Z', retryOfRunId: parent.id, retryScheduledFor: parent.scheduledFor }
+  const incomplete = await harness({ definitions: [d], runs: [parent, child], config: { historyLimit: 1 } })
+  assert.equal(incomplete.domain.runs.size, 2)
+  await incomplete.service.dispose()
+  const grandchild = { ...child, id: 'grandchild', status: 'succeeded' as const, error: null, retryOfRunId: child.id }
+  const restored = await harness({ definitions: [d], runs: [parent, child, grandchild] })
+  try {
+    assert.equal(restored.domain.runs.get(parent.id)?.status, 'succeeded')
+    assert.equal(restored.domain.runs.get(child.id)?.status, 'succeeded')
+    assert.equal((await restored.service.snapshot(scope)).attentionCount, 0)
+  } finally { await restored.service.dispose() }
+})
+
+
+test('reading during completion never restores the stale running status', async () => {
+  for (const method of ['readRun', 'markRead'] as const) {
+    const d = storedDefinition('2026-08-13T00:00:00Z')
+    let release = () => {}
+    const gate = new Promise<void>(resolve => { release = resolve })
+    let started = () => {}
+    const resolving = new Promise<void>(resolve => { started = resolve })
+    const h = await harness({ definitions: [d], resolveWorkspaceGate: gate, onResolveWorkspace: started })
+    const running = { ...failedResult(d), status: 'running' as const }
+    await h.domain.runs.put(running.id, running)
+    const reading = h.service[method](scope, running.id)
+    await resolving
+    await h.domain.runs.put(running.id, { ...running, status: 'succeeded', error: null })
+    release()
+    try {
+      await reading
+      assert.equal(h.domain.runs.get(running.id)?.status, 'succeeded')
+      assert.equal(h.domain.runs.get(running.id)?.error, null)
+    } finally { await h.service.dispose() }
+  }
 })

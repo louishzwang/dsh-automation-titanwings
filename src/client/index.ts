@@ -55,6 +55,8 @@ export function apply(ctx: ClientContext): void {
         mutateAutomation: runtime.mutateAutomation,
         runNow: runtime.runNow,
         markRunRead: runtime.markRunRead,
+        confirmRun: runtime.confirmRun,
+        retryRun: runtime.retryRun,
         archiveRun: runtime.archiveRun,
         deleteRun: runtime.deleteRun,
         updateSettings: runtime.updateSettings,
