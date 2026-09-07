@@ -4,7 +4,7 @@ export interface CalendarTask extends AutomationViewModel {
     readonly calendarDate?: string;
     readonly calendarStatus?: AutomationRunStatus;
 }
-export type CalendarTaskKind = 'active' | 'paused' | 'executed' | 'attention' | 'running' | 'ignored';
+export type CalendarTaskKind = 'active' | 'paused' | 'executed' | 'attention' | 'running';
 export declare function calendarDateKey(iso: string | Date | undefined): string | undefined;
 export declare function calendarTaskStatus(task: CalendarTask): AutomationRunStatus | undefined;
 export declare function isUnverifiedRun(run: AutomationRunViewModel | undefined): boolean;
@@ -15,3 +15,5 @@ export declare function buildTaskCalendar(automations: readonly AutomationViewMo
     readonly all: readonly CalendarTask[];
 };
 export declare function calendarCounts(tasks: readonly CalendarTask[]): Record<CalendarTaskKind, number>;
+/** Select the exact history row, even when a newer run exists on the same date. */
+export declare function taskForRun(automations: readonly AutomationViewModel[], runs: readonly AutomationRunViewModel[], runId: string): CalendarTask | undefined;

@@ -234,8 +234,7 @@ export class AutomationService {
         related.push(run)
         relatedById.set(run.automationId, related)
       }
-      const needsAttention = (run: AutomationRun): boolean => run.reviewedAt == null
-        && (run.status === 'failed' || run.status === 'skipped' || run.status === 'cancelled')
+      const needsAttention = (run: AutomationRun): boolean => (run.status === 'failed' || run.status === 'skipped' || run.status === 'cancelled')
       const attentionCount = workspaceRuns.filter(needsAttention).length
       const archivedSessionIds = new Set(this.ctx.workspaceRegistry.archivedSessionIds.map(String))
       const runs = workspaceRuns.filter((run, index) => index < this.config.historyLimit

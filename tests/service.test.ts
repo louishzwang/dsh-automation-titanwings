@@ -1402,8 +1402,8 @@ test('snapshot keeps active and unread problems outside the ordinary history lim
   assert.deepEqual(first.runs.map(r => r.id), [success.id, active.id, problem.id])
   await h.service.markRead(scope, problem.id)
   const second = await h.service.snapshot(scope)
-  assert.equal(second.attentionCount, 0)
-  assert.deepEqual(second.runs.map(r => r.id), [success.id, active.id])
+  assert.equal(second.attentionCount, 1)
+  assert.deepEqual(second.runs.map(r => r.id), [success.id, active.id, problem.id])
   await h.service.dispose()
 })
 
@@ -1414,7 +1414,7 @@ function failedResult(d: AutomationDefinition, id = 'problem'): AutomationRun {
     error: { code: 'fixture', message: 'events is not iterable' }, unread: true }
 }
 
-test('reading, ignoring and confirming are separate operations with durable audit', async () => {
+test('legacy read markers cannot resolve a problem; explicit confirmation retains audit', async () => {
   const d = storedDefinition('2026-08-13T00:00:00Z')
   const original = failedResult(d)
   const { service, domain } = await harness({ definitions: [d], runs: [original] })
@@ -1423,7 +1423,7 @@ test('reading, ignoring and confirming are separate operations with durable audi
     assert.equal(domain.runs.get(original.id)?.unread, false)
     assert.equal((await service.snapshot(scope)).attentionCount, 1)
     await service.markRead(scope, original.id)
-    assert.equal((await service.snapshot(scope)).attentionCount, 0)
+    assert.equal((await service.snapshot(scope)).attentionCount, 1)
     assert.equal(domain.runs.get(original.id)?.status, 'failed')
     const confirmed = await service.confirmRun(scope, original.id)
     assert.equal(confirmed.status, 'succeeded')

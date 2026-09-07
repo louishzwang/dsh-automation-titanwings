@@ -327,7 +327,7 @@ export function reasoningEffortChoices(
 
 /** Problem statuses that count as needs-action until the user marks them reviewed. */
 export function runNeedsAttention(run: AutomationRunViewModel): boolean {
-  return ATTENTION_STATUSES.has(run.status) && (run.needsAttention ?? (run.unread !== false))
+  return ATTENTION_STATUSES.has(run.status)
 }
 
 const ATTENTION_STATUSES = new Set<AutomationRunStatus>(['failed', 'interrupted', 'skipped', 'cancelled'])

@@ -39,7 +39,6 @@ interface AutomationRunDialogProps {
 export declare function AutomationRunDialog(props: AutomationRunDialogProps): JSX.Element;
 interface AutomationCardProps {
     readonly onResolve?: ((runId: string, action: 'confirm' | 'retry') => void) | undefined;
-    readonly onIgnore?: ((runId: string) => void) | undefined;
     readonly resolutionBusy?: boolean | undefined;
     readonly automation: CalendarTask;
     readonly onOpen: (runId: string, sessionId: string) => void;
@@ -53,8 +52,9 @@ interface AutomationCardProps {
     readonly onRun: (automation: AutomationViewModel, anchor?: DOMRect) => void;
 }
 export declare function AutomationCard(props: AutomationCardProps): JSX.Element;
-export declare function RecentRun({ run, now, t, busy, automationMissing, confirmingDelete, onOpen, onMarkRead, onReadd, onConfirmDelete, onDelete, onResolve, onAgain, resolutionBusy }: {
+export declare function RecentRun({ run, now, t, busy, automationMissing, confirmingDelete, onOpen, onReadd, onConfirmDelete, onDelete, onResolve, onAgain, resolutionBusy, onViewProblem }: {
     onResolve?: ((runId: string, action: 'confirm' | 'retry') => void) | undefined;
+    onViewProblem?: ((run: AutomationRunViewModel) => void) | undefined;
     onAgain?: (() => void) | undefined;
     resolutionBusy?: boolean | undefined;
     run: AutomationRunViewModel;

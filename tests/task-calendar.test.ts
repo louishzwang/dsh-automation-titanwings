@@ -3,7 +3,7 @@ import test from 'node:test'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { AutomationCard, AutomationRunDialog, AutomationView, RecentRun } from '../src/client/AutomationView.js'
-import { buildTaskCalendar, calendarDateKey, calendarCounts, calendarTaskKind, calendarTaskStatus } from '../src/client/task-calendar.js'
+import { buildTaskCalendar, calendarDateKey, calendarCounts, calendarTaskKind, calendarTaskStatus, taskForRun } from '../src/client/task-calendar.js'
 import { zh } from '../src/client/locales.js'
 import type { AutomationRunViewModel, AutomationViewModel } from '../src/client/protocol.js'
 
@@ -143,11 +143,11 @@ test('the actual task view counts and renders a failed task instead of an empty 
 })
 
 
-test('ignoring a reminder keeps the failed card but removes its calendar attention count', () => {
-  const ignored = run({ needsAttention: false, unread: false })
+test('previously ignored failures remain actionable and counted', () => {
+  const ignored = run({ needsAttention: false, unread: false, reviewedAt: at(6) })
   const calendar = buildTaskCalendar([task()], [ignored])
   assert.equal(dayTasks(calendar, 5).length, 1)
-  assert.equal(calendarCounts(dayTasks(calendar, 5)).attention, 0)
+  assert.equal(calendarCounts(dayTasks(calendar, 5)).attention, 1)
   assert.equal(calendarCounts(dayTasks(calendar, 5)).executed, 0)
   assert.equal(calendarTaskStatus(dayTasks(calendar, 5)[0]!), 'failed')
 })
@@ -175,21 +175,50 @@ test('task and history cards share resolution actions and retain audit after con
   const card = renderToStaticMarkup(createElement(AutomationCard, {
     automation: { ...task(), calendarRun: history }, now: new Date(at(7)), t, busyKey: undefined,
     confirmingDelete: false, onConfirmDelete: noop, onEdit: noop, onMutate: noop, onRun: noop, onOpen: noop,
-    onResolve: noop, onIgnore: noop,
+    onResolve: noop,
   }))
   for (const html of [card, renderHistory(history)]) {
     assert.match(html, />确认无误<|>重试</)
-    assert.match(html, />忽略提醒</)
-    assert.match(html, />再次执行</)
+    assert.doesNotMatch(html, />忽略提醒</)
+    assert.doesNotMatch(html, />再次执行</)
   }
   assert.doesNotMatch(renderHistory(history, true), />重试</)
   const ignored = renderHistory({ ...history, unread: false, needsAttention: false })
-  assert.match(ignored, /已忽略提醒，原状态保留/)
+  assert.doesNotMatch(ignored, /已忽略提醒，原状态保留/)
   assert.doesNotMatch(ignored, />忽略提醒</)
   assert.match(ignored, />确认无误</)
   const confirmed = renderHistory({ ...history, status: 'succeeded', needsAttention: false,
     resolution: { kind: 'confirmed', at: at(7), previousStatus: 'failed', previousError: { code: 'fixture', message: 'events is not iterable' } } })
+  assert.match(confirmed, />再次执行</)
   assert.match(confirmed, /已人工确认无误/)
   assert.match(confirmed, /events is not iterable/)
   assert.doesNotMatch(confirmed, />确认无误<|>重试<|>忽略提醒</)
+})
+
+
+test('history navigation selects the exact problem and follows its resolved state', () => {
+  const original = run({ needsAttention: false, unread: false })
+  const newer = run({ id: 'newer', status: 'succeeded', startedAt: at(5, 12) })
+  const selected = taskForRun([task()], [original, newer], original.id)!
+  assert.equal(selected.calendarRun?.id, original.id)
+  assert.equal(calendarTaskKind(selected), 'attention')
+  const fixed = taskForRun([task()], [{ ...original, status: 'succeeded' }, newer], original.id)!
+  assert.equal(calendarTaskKind(fixed), 'executed')
+  assert.equal(taskForRun([], [original], original.id), undefined)
+  assert.equal(taskForRun([task()], [original], 'missing'), undefined)
+})
+
+test('history offers navigation for problems and normal actions after resolution', () => {
+  const noop = () => {}
+  const render = (status: 'failed' | 'succeeded', deleted = false) => renderToStaticMarkup(createElement(RecentRun, {
+    run: run({ status }), now: new Date(at(7)), t: key => zh[key], busy: false, automationMissing: deleted,
+    confirmingDelete: false, onOpen: noop, onMarkRead: noop, onReadd: noop, onConfirmDelete: noop,
+    onDelete: noop, onResolve: noop, onAgain: noop, onViewProblem: noop,
+  }))
+  assert.match(render('failed'), />查看异常状态</)
+  assert.doesNotMatch(render('failed'), />确认无误<|>重试<|>再次执行<|>忽略提醒</)
+  assert.match(render('succeeded'), />再次执行</)
+  assert.doesNotMatch(render('succeeded'), />查看异常状态<|>确认无误<|>重试</)
+  assert.match(render('failed', true), />确认无误</)
+  assert.doesNotMatch(render('failed', true), />查看异常状态</)
 })

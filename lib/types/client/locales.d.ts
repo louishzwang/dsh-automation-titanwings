@@ -205,12 +205,12 @@ export declare const en: {
     readonly 'run.openSession': "Session {id}";
     readonly 'run.sessionArchived': "Session archived · {id}";
     readonly 'run.markRead': "Ignore reminder";
+    readonly 'run.viewProblem': "View problem";
     readonly 'run.confirmResult': "Confirm result";
     readonly 'run.confirmHint': "After checking the conversation, confirm that the result is correct. This marks the task and run as completed without running it again.";
     readonly 'run.retryHint': "Retry the original input in a new conversation. Success resolves the original run; failure stays visible. Future scheduled runs are kept.";
     readonly 'run.confirmed': "Result confirmed manually";
     readonly 'run.retried': "Resolved by a successful retry";
-    readonly 'run.ignored': "Reminder ignored; original status retained";
     readonly 'run.audit': "View original status and error";
     readonly 'run.readd': "Add as new";
     readonly 'run.delete': "Delete record";

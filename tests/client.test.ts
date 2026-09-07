@@ -317,7 +317,7 @@ test('floating editor geometry honours the visual viewport origin', () => {
   assert.equal(clampedLow.y + clampedLow.h <= 60 + 600 - 8, true)
 })
 
-test('deriveOverview counts unread problem runs and ignores reviewed ones', () => {
+test('deriveOverview counts every unresolved problem regardless of read state', () => {
   const snapshot: AutomationSnapshot = {
     scope: { cwd: '/workspace' },
     serverNow: '2026-08-13T00:00:00.000Z',
@@ -348,7 +348,7 @@ test('deriveOverview counts unread problem runs and ignores reviewed ones', () =
   assert.deepEqual(deriveOverview(snapshot), {
     total: 2,
     active: 1,
-    attention: 2,
+    attention: 4,
     nextRunAt: '2026-08-13T09:00:00.000Z',
   })
 })
@@ -572,7 +572,7 @@ test('run cards expose re-add and record-delete actions with a confirm step', ()
   assert.match(confirming.filter(node => node.type === 'button').map(node => String(node.props?.children)).join(' | '), /Confirm delete/)
 })
 
-test('legacy skipped and cancelled runs offer ignore reminder exactly while unread', () => {
+test('problem runs never offer the obsolete ignore reminder action', () => {
   type RenderedNode = {
     readonly type?: unknown
     readonly props?: { readonly className?: string; readonly children?: unknown }
@@ -598,7 +598,7 @@ test('legacy skipped and cancelled runs offer ignore reminder exactly while unre
   const offersMarkReviewed = (status: 'skipped' | 'cancelled', unread: boolean): boolean => render(status, unread)
     .some(node => node.type === 'button' && String(node.props?.children).includes('Ignore reminder'))
   for (const status of ['skipped', 'cancelled'] as const) {
-    assert.equal(offersMarkReviewed(status, true), true)
+    assert.equal(offersMarkReviewed(status, true), false)
     assert.equal(offersMarkReviewed(status, false), false)
   }
 })

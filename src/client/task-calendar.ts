@@ -6,7 +6,7 @@ export interface CalendarTask extends AutomationViewModel {
   readonly calendarDate?: string
   readonly calendarStatus?: AutomationRunStatus
 }
-export type CalendarTaskKind = 'active' | 'paused' | 'executed' | 'attention' | 'running' | 'ignored'
+export type CalendarTaskKind = 'active' | 'paused' | 'executed' | 'attention' | 'running'
 const PROBLEM_STATUSES = new Set<AutomationRunStatus>(['failed', 'interrupted', 'skipped', 'cancelled'])
 
 export function calendarDateKey(iso: string | Date | undefined): string | undefined {
@@ -25,7 +25,7 @@ export function isUnverifiedRun(run: AutomationRunViewModel | undefined): boolea
 export function calendarTaskKind(task: CalendarTask): CalendarTaskKind {
   const status = calendarTaskStatus(task)
   if (status === 'queued' || status === 'running') return 'running'
-  if (status !== undefined && PROBLEM_STATUSES.has(status)) return task.calendarRun?.needsAttention === false ? 'ignored' : 'attention'
+  if (status !== undefined && PROBLEM_STATUSES.has(status)) return 'attention'
   if (task.calendarDate !== undefined && status === 'succeeded'
     && calendarDateKey(task.nextRunAt) !== task.calendarDate) return 'executed'
   if (isFulfilledAutomation(task)) return 'executed'
@@ -84,7 +84,17 @@ export function buildTaskCalendar(
   }
 }
 export function calendarCounts(tasks: readonly CalendarTask[]): Record<CalendarTaskKind, number> {
-  const counts = { active: 0, paused: 0, executed: 0, attention: 0, running: 0, ignored: 0 }
+  const counts = { active: 0, paused: 0, executed: 0, attention: 0, running: 0 }
   for (const task of tasks) counts[calendarTaskKind(task)] += 1
   return counts
+}
+
+
+/** Select the exact history row, even when a newer run exists on the same date. */
+export function taskForRun(automations: readonly AutomationViewModel[], runs: readonly AutomationRunViewModel[], runId: string): CalendarTask | undefined {
+  const run = runs.find(item => item.id === runId)
+  const automation = run === undefined ? undefined : automations.find(item => item.id === run.automationId)
+  if (automation === undefined || run === undefined) return undefined
+  const date = calendarDateKey(run.retryScheduledFor ?? run.scheduledFor)
+  return { ...automation, calendarRun: run, ...(date === undefined ? {} : { calendarDate: date }) }
 }
