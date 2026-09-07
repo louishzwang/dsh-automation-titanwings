@@ -12,7 +12,7 @@ export function RunResolutionActions({ run, t, busy, onResolve, canRetry = true 
 }): JSX.Element | null {
   const [pending, setPending] = useState<'confirm' | 'retry'>()
   if (run.status === 'succeeded' && run.resolution !== undefined) return (
-    <details className="dsh-automation-prompt-details">
+    <details className="dsh-automation-prompt-details dsh-automation-resolution-details">
       <summary>{t(run.resolution.kind === 'confirmed' ? 'run.confirmed' : 'run.retried')} · {t('run.audit')}</summary>
       <p>{t(`status.${run.resolution.previousStatus}`)} · {run.resolution.at}</p>
       {run.resolution.previousError !== null && <pre>{run.resolution.previousError.message}</pre>}
@@ -31,7 +31,7 @@ export function RunResolutionActions({ run, t, busy, onResolve, canRetry = true 
           <div><strong>{t(pending === 'confirm' ? 'run.confirmResult' : 'card.retry')}</strong><span>{t(pending === 'confirm' ? 'run.confirmHint' : 'run.retryHint')}</span></div>
           <div>
             <button className="dsh-automation-button dsh-automation-button--ghost" type="button" disabled={busy} onClick={() => setPending(undefined)}>{t('card.cancel')}</button>
-            <button className="dsh-automation-button dsh-automation-button--primary" type="button" disabled={busy} onClick={() => { onResolve(run.id, pending); setPending(undefined) }}>{t('card.confirm')}</button>
+            <button className="dsh-automation-button dsh-automation-button--primary" type="button" disabled={busy} onClick={() => { onResolve(run.id, pending); setPending(undefined) }}>{t('run.confirmAction')}</button>
           </div>
         </div>
       ))}

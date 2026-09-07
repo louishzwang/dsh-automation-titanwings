@@ -206,6 +206,7 @@ export declare const en: {
     readonly 'run.sessionArchived': "Session archived · {id}";
     readonly 'run.markRead': "Ignore reminder";
     readonly 'run.viewProblem': "View problem";
+    readonly 'run.confirmAction': "Confirm";
     readonly 'run.confirmResult': "Confirm result";
     readonly 'run.confirmHint': "After checking the conversation, confirm that the result is correct. This marks the task and run as completed without running it again.";
     readonly 'run.retryHint': "Retry the original input in a new conversation. Success resolves the original run; failure stays visible. Future scheduled runs are kept.";
