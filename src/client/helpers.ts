@@ -121,6 +121,15 @@ function exactLocalDateTimeValue(iso: string): string {
   return new Date(date.getTime() - offset).toISOString().slice(0, 16)
 }
 
+/** Refresh stale create-only dates while retaining the user's future choice and draft. */
+export function freshCreateForm(initial: AutomationFormState | undefined, now = new Date()): AutomationFormState {
+  const form = initial ?? defaultFormState(now)
+  const at = new Date(form.onceAt).getTime()
+  return Number.isFinite(at) && at > now.getTime()
+    ? form
+    : { ...form, onceAt: localDateTimeValue(now) }
+}
+
 /** Build an editable draft from the complete durable definition, not its card preview. */
 export function formStateFromAutomation(automation: AutomationViewModel): AutomationFormState {
   const defaults = defaultFormState()

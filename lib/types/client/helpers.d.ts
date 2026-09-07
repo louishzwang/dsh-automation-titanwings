@@ -32,6 +32,8 @@ export declare class AutomationFormError extends Error {
 export declare function localDateTimeValue(date?: Date): string;
 /** Create a fresh form state; the schedule defaults to a single future run. */
 export declare function defaultFormState(now?: Date): AutomationFormState;
+/** Refresh stale create-only dates while retaining the user's future choice and draft. */
+export declare function freshCreateForm(initial: AutomationFormState | undefined, now?: Date): AutomationFormState;
 /** Build an editable draft from the complete durable definition, not its card preview. */
 export declare function formStateFromAutomation(automation: AutomationViewModel): AutomationFormState;
 export declare function buildCreateInput(form: AutomationFormState, now?: Date): CreateAutomationInput;

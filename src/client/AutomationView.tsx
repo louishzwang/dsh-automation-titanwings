@@ -18,6 +18,7 @@ import {
   formatSchedule,
   formatRelativeTime,
   formStateFromAutomation,
+  freshCreateForm,
   isFulfilledAutomation,
   isSameLocalDay,
   modelRouteChoices,
@@ -438,7 +439,7 @@ type AutomationFormProps = FormCommonProps & ({
 function AutomationForm(props: AutomationFormProps): JSX.Element {
   const { t, busy, loadModelCatalog, onCancel } = props
   const [form, setForm] = useState<AutomationFormState>(() => props.mode === 'create'
-    ? props.initial ?? defaultFormState()
+    ? freshCreateForm(props.initial)
     : formStateFromAutomation(props.automation))
   const zoneChoices = useMemo(() => timeZoneChoices(form.timeZone), [form.timeZone])
   const [draftSaved, setDraftSaved] = useState(false)
@@ -471,7 +472,12 @@ function AutomationForm(props: AutomationFormProps): JSX.Element {
   }, [catalogGeneration, loadModelCatalog])
 
   const update = <Key extends keyof AutomationFormState>(key: Key, value: AutomationFormState[Key]): void => {
-    setForm(current => ({ ...current, [key]: value }))
+    setForm(current => {
+      const next = { ...current, [key]: value }
+      return props.mode === 'create' && key === 'scheduleKind' && value === 'once'
+        ? freshCreateForm(next)
+        : next
+    })
     setDraftSaved(false)
     setValidationError(undefined)
   }

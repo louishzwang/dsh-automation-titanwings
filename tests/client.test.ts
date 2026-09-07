@@ -12,6 +12,7 @@ import {
   defaultFormState,
   deriveOverview,
   formStateFromAutomation,
+  freshCreateForm,
   formatRelativeTime,
   formatSchedule,
   isSameLocalDay,
@@ -749,4 +750,30 @@ test('new hosts separate opening a conversation from ignoring and refresh every 
   await runtime.retryRun('r')
   await runtime.markRunRead('r')
   assert.deepEqual(calls, ['read-run', 'snapshot', 'confirm-run', 'snapshot', 'retry-run', 'snapshot', 'mark-read', 'snapshot'])
+})
+
+
+test('create defaults and stale drafts advance to the next local whole hour', () => {
+  for (const now of [new Date(2026, 8, 7, 14), new Date(2026, 8, 7, 14, 37), new Date(2026, 8, 7, 23, 59)]) {
+    const expected = new Date(now)
+    expected.setHours(now.getHours() + 1, 0, 0, 0)
+    const oldDraft = { ...defaultFormState(new Date(2026, 8, 3)), name: 'Keep name', prompt: 'Keep input', provider: 'route', model: 'model' }
+    const before = JSON.stringify(oldDraft)
+    for (const initial of [undefined, oldDraft, { ...oldDraft, onceAt: '' }, { ...oldDraft, onceAt: 'invalid' }, { ...oldDraft, onceAt: now.toISOString() }]) {
+      const actual = freshCreateForm(initial, now)
+      assert.equal(new Date(actual.onceAt).getTime(), expected.getTime())
+      if (initial !== undefined) assert.deepEqual({ ...actual, onceAt: initial.onceAt }, initial)
+    }
+    assert.equal(JSON.stringify(oldDraft), before)
+  }
+})
+
+test('create keeps explicit future dates and refreshes again after a draft ages', () => {
+  const now = new Date(2026, 8, 7, 14)
+  const future = defaultFormState(new Date(2026, 8, 9, 10))
+  assert.equal(freshCreateForm(future, now), future)
+  const reopened = freshCreateForm(future, new Date(2026, 8, 12, 14))
+  assert.equal(new Date(reopened.onceAt).getTime(), new Date(2026, 8, 12, 15).getTime())
+  const switching = freshCreateForm({ ...future, scheduleKind: 'once' }, new Date(2026, 8, 12, 14))
+  assert.equal(switching.onceAt, reopened.onceAt)
 })
