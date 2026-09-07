@@ -1,5 +1,6 @@
+import { type CalendarTask } from './task-calendar.js';
 import type { AutomationViewProps, Translate } from './contracts.js';
-import type { AutomationRunViewModel } from './protocol.js';
+import type { AutomationRunViewModel, AutomationViewModel, RunNowMode } from './protocol.js';
 interface TimeZoneChoice {
     readonly value: string;
     readonly label: string;
@@ -27,6 +28,28 @@ export interface AutomationFloatAnchor {
 /** Keep the complete floating editor inside even a narrow visual viewport. */
 export declare function clampAutomationFloatBox(value: AutomationFloatBox, viewport: AutomationFloatViewport): AutomationFloatBox;
 export declare function initialAutomationFloatBox(anchor?: AutomationFloatAnchor, viewport?: AutomationFloatViewport, initialHeight?: number): AutomationFloatBox;
+interface AutomationRunDialogProps {
+    readonly t: Translate;
+    readonly automation: CalendarTask;
+    readonly busy: boolean;
+    readonly onCancel: () => void;
+    readonly onRun: (automationId: string, mode: RunNowMode) => Promise<void>;
+}
+/** Ask how a manual run should treat the pending schedule: replace it or leave it. */
+export declare function AutomationRunDialog(props: AutomationRunDialogProps): JSX.Element;
+interface AutomationCardProps {
+    readonly automation: CalendarTask;
+    readonly onOpen: (runId: string, sessionId: string) => void;
+    readonly now: Date;
+    readonly t: Translate;
+    readonly busyKey: string | undefined;
+    readonly confirmingDelete: boolean;
+    readonly onConfirmDelete: (id?: string) => void;
+    readonly onEdit: (automation: AutomationViewModel, anchor?: DOMRect) => void;
+    readonly onMutate: (id: string, mutation: 'pause' | 'resume' | 'delete') => void;
+    readonly onRun: (automation: AutomationViewModel, anchor?: DOMRect) => void;
+}
+export declare function AutomationCard(props: AutomationCardProps): JSX.Element;
 export declare function RecentRun({ run, now, t, busy, automationMissing, confirmingDelete, onOpen, onMarkRead, onReadd, onConfirmDelete, onDelete }: {
     run: AutomationRunViewModel;
     now: Date;

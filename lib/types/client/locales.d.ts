@@ -19,6 +19,13 @@ export declare const en: {
     readonly 'stats.currentStatus': "Current status:";
     readonly 'stats.paused': "Paused";
     readonly 'stats.executed': "Executed";
+    readonly 'stats.taskAttention': "Needs attention";
+    readonly 'calendar.attentionCount': "{count} need attention";
+    readonly 'calendar.runningCount': "{count} running";
+    readonly 'card.retry': "Retry";
+    readonly 'card.resultUnverified': "Result unverified";
+    readonly 'card.resultUnverifiedHint': "The run result could not be read. Open the conversation to verify the outcome before retrying.";
+    readonly 'card.dayRun': "Run for this date";
     readonly 'stats.noneScheduled': "Not scheduled";
     readonly 'stats.noAttention': "All clear";
     readonly 'section.automations': "Workspace automations";

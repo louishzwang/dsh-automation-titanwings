@@ -119,6 +119,10 @@ const CSS_TEXT = String.raw`
 .dsh-automation-cal-date{font-size:12px;font-weight:650;line-height:16px}
 .dsh-automation-cal-day.is-today .dsh-automation-cal-date{color:var(--dsw-alias-state-business-primary)}
 .dsh-automation-cal-count{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;padding:0 6px;border-radius:999px;background:var(--dsw-alias-state-business-primary);color:var(--dsw-alias-label-primary-foreground);font-size:10px;line-height:14px}
+
+.dsh-automation-cal-count--attention{background:var(--dsw-alias-state-error-secondary);color:var(--dsw-alias-state-error-primary)}
+.dsh-automation-task-error{margin:8px 0;color:var(--dsw-alias-state-error-primary);font-size:12px;line-height:1.5;overflow-wrap:anywhere}
+.dsh-automation-task-counts{font-size:12px;line-height:18px;white-space:nowrap}
 .dsh-automation-cal-count--paused{background:var(--dsw-alias-bg-layer-3);color:var(--dsw-alias-label-secondary)}.dsh-automation-cal-count--executed{background:var(--dsw-alias-bg-layer-3);color:var(--dsw-alias-label-tertiary)}
 .dsh-automation-cal-month{display:block;margin-bottom:14px}
 .dsh-automation-cal-month-weekdays{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:6px;margin-bottom:6px}

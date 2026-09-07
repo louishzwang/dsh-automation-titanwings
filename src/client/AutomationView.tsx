@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { startRefreshLoop } from './refresh-loop.js'
+import { buildTaskCalendar, calendarDateKey, calendarCounts, calendarTaskKind, calendarTaskStatus, isUnverifiedRun, type CalendarTask } from './task-calendar.js'
 import type { AutomationViewProps, Translate } from './contracts.js'
 import type { AutomationLocaleKey } from './locales.js'
 import {
@@ -10,9 +11,6 @@ import {
   buildUpdateInput,
   buildWeekCalendarDays,
   clearDraft,
-  countAutomationsByStatusOnDay,
-  countAutomationsOnDay,
-  countExecutedOnDay,
   defaultFormState,
   deriveOverview,
   formatSchedule,
@@ -926,17 +924,17 @@ function AutomationSettingsPanel(props: AutomationSettingsPanelProps): JSX.Eleme
 
 interface AutomationRunDialogProps {
   readonly t: Translate
-  readonly automation: AutomationViewModel
+  readonly automation: CalendarTask
   readonly busy: boolean
   readonly onCancel: () => void
   readonly onRun: (automationId: string, mode: RunNowMode) => Promise<void>
 }
 
 /** Ask how a manual run should treat the pending schedule: replace it or leave it. */
-function AutomationRunDialog(props: AutomationRunDialogProps): JSX.Element {
+export function AutomationRunDialog(props: AutomationRunDialogProps): JSX.Element {
   const { t, automation, busy, onCancel, onRun } = props
   const canAhead = automation.nextRunAt !== undefined
-  const [mode, setMode] = useState<RunNowMode>('ahead')
+  const [mode, setMode] = useState<RunNowMode>(() => calendarTaskKind(automation) === 'attention' ? 'plain' : 'ahead')
   const chosen = canAhead ? mode : 'plain'
   const submit = (event: FormEvent): void => {
     event.preventDefault()
@@ -997,7 +995,8 @@ function AutomationRunDialog(props: AutomationRunDialogProps): JSX.Element {
 }
 
 interface AutomationCardProps {
-  readonly automation: AutomationViewModel
+  readonly automation: CalendarTask
+  readonly onOpen: (runId: string, sessionId: string) => void
   readonly now: Date
   readonly t: Translate
   readonly busyKey: string | undefined
@@ -1008,10 +1007,16 @@ interface AutomationCardProps {
   readonly onRun: (automation: AutomationViewModel, anchor?: DOMRect) => void
 }
 
-function AutomationCard(props: AutomationCardProps): JSX.Element {
+export function AutomationCard(props: AutomationCardProps): JSX.Element {
   const { automation, now, t, busyKey, confirmingDelete, onConfirmDelete, onEdit, onMutate, onRun } = props
   const isBusy = busyKey?.endsWith(`:${automation.id}`) === true
-  const fulfilled = isFulfilledAutomation(automation)
+  const fulfilled = calendarTaskKind(automation) === 'executed'
+  const run = automation.calendarRun
+  const runStatus = calendarTaskStatus(automation)
+  const problem = calendarTaskKind(automation) === 'attention'
+  const unverified = isUnverifiedRun(run)
+  const lastRunAt = run?.finishedAt ?? run?.startedAt ?? run?.scheduledFor
+    ?? (automation.calendarDate !== undefined && automation.calendarStatus === undefined ? undefined : automation.lastRunAt)
   return (
     <article className="dsh-automation-card">
       <div className="dsh-automation-card-top">
@@ -1020,7 +1025,10 @@ function AutomationCard(props: AutomationCardProps): JSX.Element {
           <div>
             <h3>{automation.name}</h3>
             <div className="dsh-automation-card-badges">
-              {fulfilled ? (
+              {problem || runStatus === 'queued' || runStatus === 'running' ? (
+                unverified ? <span className="dsh-automation-run-status dsh-automation-run-status--failed">{t('card.resultUnverified')}</span>
+                  : <RunStatusBadge status={runStatus!} t={t} />
+              ) : fulfilled ? (
                 <span className="dsh-automation-badge dsh-automation-badge--executed">
                   <span className="dsh-automation-status-dot" />
                   {t('card.executed')}
@@ -1066,13 +1074,21 @@ function AutomationCard(props: AutomationCardProps): JSX.Element {
                 : '—'}</dd>
         </div>
         <div>
-          <dt>{t('card.lastRun')}</dt>
-          <dd>{automation.lastRunAt === undefined
+          <dt>{t(automation.calendarDate === undefined ? 'card.lastRun' : 'card.dayRun')}</dt>
+          <dd>{lastRunAt === undefined
             ? t('card.never')
-            : <><span className={`dsh-automation-mini-dot${fulfilled ? '' : ` dsh-automation-mini-dot--${automation.lastRunStatus ?? 'succeeded'}`}`} />{formatRelativeTime(automation.lastRunAt, now, t)}</>}</dd>
+            : <><span className={`dsh-automation-mini-dot${fulfilled ? '' : ` dsh-automation-mini-dot--${runStatus ?? 'succeeded'}`}`} />{formatRelativeTime(lastRunAt, now, t)}</>}</dd>
         </div>
       </dl>
 
+      {problem && run?.error !== undefined && <p className="dsh-automation-task-error">{unverified ? t('card.resultUnverifiedHint') : run.error}</p>}
+      {run?.sessionId !== undefined && (
+        <div className="dsh-automation-run-session-row">
+          {run.sessionArchived
+            ? <span className="dsh-automation-session-id dsh-automation-session-id--archived">{t('run.sessionArchived', { id: shortSessionId(run.sessionId) })}</span>
+            : <button className="dsh-automation-session-id" type="button" disabled={isBusy} onClick={() => props.onOpen(run.id, run.sessionId!)}>{t('run.openSession', { id: shortSessionId(run.sessionId) })}</button>}
+        </div>
+      )}
       {confirmingDelete ? (
         <div className="dsh-automation-delete-confirm">
           <div><strong>{t('card.confirmDelete')}</strong><span>{t('card.confirmDeleteHint')}</span></div>
@@ -1087,9 +1103,9 @@ function AutomationCard(props: AutomationCardProps): JSX.Element {
             <PencilIcon />{t('card.edit')}
           </button>
           <button className="dsh-automation-button dsh-automation-button--ghost" type="button" onClick={(event) => onRun(automation, event.currentTarget.getBoundingClientRect())} disabled={isBusy}>
-            <PlayIcon />{t(automation.lastRunAt === undefined ? 'card.runNow' : 'card.runAgain')}
+            <PlayIcon />{t(problem && !unverified ? 'card.retry' : automation.lastRunAt === undefined ? 'card.runNow' : 'card.runAgain')}
           </button>
-          {!fulfilled && (
+          {!isFulfilledAutomation(automation) && (
             <button className="dsh-automation-button dsh-automation-button--ghost" type="button" onClick={() => onMutate(automation.id, automation.status === 'active' ? 'pause' : 'resume')} disabled={isBusy}>
               {automation.status === 'active' ? <PauseIcon /> : <PlayIcon />}
               {t(automation.status === 'active' ? 'card.pause' : 'card.resume')}
@@ -1298,29 +1314,21 @@ export function AutomationView({
     automations.filter(item => item.status === 'paused').length
   ), [automations])
   const todayStart = useMemo(() => startOfLocalDay(now), [now])
-  // One day's task list: runs pending that day, then tasks finished that day
-  // (marked executed). Mirrors the Today view for any picked calendar day.
-  const buildDayList = (day: Date): AutomationViewModel[] => {
-    const onDay = (iso: string | undefined): boolean => (
-      iso !== undefined && isSameLocalDay(new Date(iso), day)
-    )
-    const pending = automations.filter(automation => onDay(automation.nextRunAt))
-    const finished = automations
-      .filter(automation => isFulfilledAutomation(automation) && onDay(automation.lastRunAt))
-      .sort((left, right) => String(right.lastRunAt ?? '').localeCompare(String(left.lastRunAt ?? '')))
-    return [...sortAutomations(pending, sortKey, sortDirection), ...finished]
+  const taskCalendar = useMemo(() => buildTaskCalendar(automations, snapshot?.runs ?? []), [automations, snapshot?.runs])
+  const attentionTaskCount = useMemo(() => calendarCounts(taskCalendar.all).attention, [taskCalendar])
+  const runningTaskCount = useMemo(() => calendarCounts(taskCalendar.all).running, [taskCalendar])
+  const buildDayList = (day: Date): CalendarTask[] => {
+    const tasks = taskCalendar.days.get(calendarDateKey(day)!) ?? []
+    // Preserve the user's sort preference without losing the calendar metadata.
+    const byId = new Map(tasks.map(task => [task.id, task]))
+    return sortAutomations(tasks, sortKey, sortDirection).map(task => byId.get(task.id)!)
   }
   const todayAutomations = useMemo(
     () => buildDayList(todayStart),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [automations, sortDirection, sortKey, todayStart],
+    [taskCalendar, sortDirection, sortKey, todayStart],
   )
-  const todayPendingCount = useMemo(() => {
-    const isOnToday = (iso: string | undefined): boolean => (
-      iso !== undefined && isSameLocalDay(new Date(iso), todayStart)
-    )
-    return automations.filter(automation => isOnToday(automation.nextRunAt)).length
-  }, [automations, todayStart])
+  const todayPendingCount = useMemo(() => todayAutomations.filter(task => calendarTaskKind(task) !== 'executed').length, [todayAutomations])
   const calendarAnchor = calendarCursor ?? startOfLocalWeek(todayStart)
   const pickedDate = selectedDate ?? todayStart
   const weekDays = useMemo(() => buildWeekCalendarDays(calendarAnchor), [calendarAnchor])
@@ -1331,19 +1339,19 @@ export function AutomationView({
   const dayAutomations = useMemo(
     () => buildDayList(pickedDate),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [automations, pickedDate, sortDirection, sortKey],
+    [taskCalendar, pickedDate, sortDirection, sortKey],
   )
   const visibleAutomations = useMemo(() => {
     if (taskView === 'today') return todayAutomations
-    if (rangeView === 'list') return automations
+    if (rangeView === 'list') return taskCalendar.all
     return dayAutomations
-  }, [dayAutomations, rangeView, taskView, todayAutomations])
+  }, [dayAutomations, rangeView, taskView, todayAutomations, taskCalendar])
   // Executed cards stay in the view but render below the create button.
   const visiblePending = useMemo(() => (
-    visibleAutomations.filter(automation => !isFulfilledAutomation(automation))
+    visibleAutomations.filter(automation => calendarTaskKind(automation) !== 'executed')
   ), [visibleAutomations])
   const visibleExecuted = useMemo(() => (
-    visibleAutomations.filter(isFulfilledAutomation)
+    visibleAutomations.filter(automation => calendarTaskKind(automation) === 'executed')
   ), [visibleAutomations])
   const automationIdSet = useMemo(() => (
     new Set((snapshot?.automations ?? []).map(item => item.id))
@@ -1693,6 +1701,10 @@ export function AutomationView({
                   <span className="dsh-automation-status-item"><b>{t('stats.next')}</b><em>{stats?.nextRunAt === undefined ? t('stats.noneScheduled') : formatRelativeTime(stats.nextRunAt, now, t)}</em></span>
                 </div>
               </div>
+              <div className="dsh-automation-status-column dsh-automation-task-counts">
+                <span className="dsh-automation-status-item"><b>{t('stats.taskAttention')}</b><em>{attentionTaskCount}</em></span>
+                <span className="dsh-automation-status-item"><b>{t('status.running')}</b><em>{runningTaskCount}</em></span>
+              </div>
               <div className="dsh-automation-toolbar-actions">
                 <button className="dsh-automation-button dsh-automation-button--primary" type="button" onClick={toggleCreate}>
                   {showCreate ? <><PauseIcon />{t('header.closeCreate')}</> : <><PlusIcon />{t('header.create')}</>}
@@ -1747,8 +1759,8 @@ export function AutomationView({
                   {rangeView === 'week' ? (
                     <div className="dsh-automation-cal-week">
                       {weekDays.map(day => {
-                        const counts = countAutomationsByStatusOnDay(automations, day)
-                        const executed = countExecutedOnDay(automations, day)
+                        const counts = calendarCounts(taskCalendar.days.get(calendarDateKey(day)!) ?? [])
+                        const executed = counts.executed
                         const weekday = day.getDay() === 0 ? 7 : day.getDay()
                         return (
                           <button key={day.toISOString()} type="button" className={`dsh-automation-cal-day${isSameLocalDay(day, todayStart) ? ' is-today' : ''}${isSameLocalDay(day, pickedDate) ? ' is-selected' : ''}`} onClick={() => selectDay(day)}>
@@ -1757,6 +1769,8 @@ export function AutomationView({
                             {counts.active > 0 && <span className="dsh-automation-cal-count">{t('calendar.taskCount', { count: counts.active })}</span>}
                             {counts.paused > 0 && <span className="dsh-automation-cal-count dsh-automation-cal-count--paused">{t('calendar.pausedCount', { count: counts.paused })}</span>}
                             {executed > 0 && <span className="dsh-automation-cal-count dsh-automation-cal-count--executed">{t('calendar.executedCount', { count: executed })}</span>}
+                            {counts.attention > 0 && <span className="dsh-automation-cal-count dsh-automation-cal-count--attention">{t('calendar.attentionCount', { count: counts.attention })}</span>}
+                            {counts.running > 0 && <span className="dsh-automation-cal-count">{t('calendar.runningCount', { count: counts.running })}</span>}
                           </button>
                         )
                       })}
@@ -1770,8 +1784,8 @@ export function AutomationView({
                       </div>
                       <div className="dsh-automation-cal-month-grid">
                         {monthDays.map(day => {
-                          const counts = countAutomationsByStatusOnDay(automations, day)
-                          const executed = countExecutedOnDay(automations, day)
+                          const counts = calendarCounts(taskCalendar.days.get(calendarDateKey(day)!) ?? [])
+                          const executed = counts.executed
                           const otherMonth = day.getMonth() !== calendarAnchor.getMonth()
                           return (
                             <button key={day.toISOString()} type="button" className={`dsh-automation-cal-month-day${otherMonth ? ' is-other' : ''}${isSameLocalDay(day, todayStart) ? ' is-today' : ''}${isSameLocalDay(day, pickedDate) ? ' is-selected' : ''}`} onClick={() => selectDay(day)}>
@@ -1779,6 +1793,8 @@ export function AutomationView({
                               {counts.active > 0 && <span className="dsh-automation-cal-count">{t('calendar.taskCount', { count: counts.active })}</span>}
                               {counts.paused > 0 && <span className="dsh-automation-cal-count dsh-automation-cal-count--paused">{t('calendar.pausedCount', { count: counts.paused })}</span>}
                               {executed > 0 && <span className="dsh-automation-cal-count dsh-automation-cal-count--executed">{t('calendar.executedCount', { count: executed })}</span>}
+                            {counts.attention > 0 && <span className="dsh-automation-cal-count dsh-automation-cal-count--attention">{t('calendar.attentionCount', { count: counts.attention })}</span>}
+                            {counts.running > 0 && <span className="dsh-automation-cal-count">{t('calendar.runningCount', { count: counts.running })}</span>}
                             </button>
                           )
                         })}
@@ -1818,6 +1834,7 @@ export function AutomationView({
                     onEdit={onEdit}
                     onMutate={onMutate}
                     onRun={onRun}
+                  onOpen={onOpenSession}
                   />
                 ))}
               </div>
@@ -1844,6 +1861,7 @@ export function AutomationView({
                   onEdit={onEdit}
                   onMutate={onMutate}
                   onRun={onRun}
+                    onOpen={onOpenSession}
                 />
               ))}
             </div>
