@@ -1,12 +1,8 @@
 /** Fresh-Agent execution boundary for one already-claimed automation run. */
 import { type ModelSelection } from '@deepseek-ai/dsh-agent';
 import type { Context } from '@deepseek-ai/cordis';
+import { type SessionEventLike } from './session-events.ts';
 import type { AutomationDefinition, AutomationRun, AutomationTargetSnapshot } from './types.ts';
-interface SessionEventLike {
-    readonly seq: number;
-    readonly type: string;
-    readonly data: Record<string, any>;
-}
 /** Final scoped denial for capabilities that require a person or spawn another authority boundary. */
 export declare function unattendedToolGuardReason(name: string, args: unknown): string | undefined;
 export interface RunCompletion {
@@ -36,4 +32,3 @@ export declare function modelSelectionForRun(target: AutomationTargetSnapshot, f
  * before publication.
  */
 export declare function executeAutomationRun(ctx: Context, definition: AutomationDefinition, run: AutomationRun, config: ExecutorConfig): Promise<RunCompletion>;
-export {};

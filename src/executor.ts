@@ -10,14 +10,10 @@ import { SessionId } from '@deepseek-ai/dsh-session'
 import { setApprovalPolicy } from '@deepseek-ai/dsh-user-approval'
 import { WorkspaceId } from '@deepseek-ai/dsh-workspace'
 import type { ToolExecution } from '@deepseek-ai/dsh-tools'
+import { readSessionEvents, type SessionEventLike } from './session-events.ts'
 import type { AutomationDefinition, AutomationRun, AutomationTargetSnapshot } from './types.ts'
 
 interface TextBlock { readonly type: string; readonly text?: string }
-interface SessionEventLike {
-  readonly seq: number
-  readonly type: string
-  readonly data: Record<string, any>
-}
 
 const UNATTENDED_TOOL_ALLOWLIST = new Set([
   'run_code',
@@ -217,7 +213,7 @@ export async function executeAutomationRun(
     if (timedOut || aborted) await handle.agent.whenIdle()
     if (timeout !== undefined) clearTimeout(timeout)
     await ctx.sessions.flush(handle.agent.session)
-    const outcome = summarizeRun(handle.agent.session.events, firstSeq)
+    const outcome = summarizeRun(readSessionEvents(handle.agent.session, firstSeq), firstSeq)
     const summary = boundSummary(outcome.text)
     if (aborted) {
       return {

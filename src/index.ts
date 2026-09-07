@@ -6,6 +6,7 @@ import z from '@deepseek-ai/schemastery'
 import { registerAutomationRpc } from './rpc.ts'
 import { AutomationService } from './service.ts'
 import { registerAutomationTools } from './tools.ts'
+import { readSessionEvents } from './session-events.ts'
 
 export const name = 'dsh-automation'
 export const inject = [
@@ -132,8 +133,14 @@ export async function apply(ctx: Context, rawConfig: Config): Promise<void> {
     try {
       const mountTools = (agent: any): void => {
         if (!alive || agentTools.has(String(agent.id))
-          || service.ownsSession(String(agent.id), agent.session.events)) return
+          || service.ownsSession(String(agent.id))) return
         if (!ctx.agents.roots().includes(agent)) return
+        try {
+          if (service.ownsSession(String(agent.id), readSessionEvents(agent.session))) return
+        } catch (error: unknown) {
+          ctx.logger.warn(`dsh-automation: cannot verify Session provenance; management tools withheld: ${String(error)}`)
+          return
+        }
         const dispose = agent.ctx.effect(
           () => registerAutomationTools(service, agent),
           'dsh-automation: management tools',
