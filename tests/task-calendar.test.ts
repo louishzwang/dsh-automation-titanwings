@@ -1,0 +1,224 @@
+import assert from 'node:assert/strict'
+import test from 'node:test'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
+import { AutomationCard, AutomationRunDialog, AutomationView, RecentRun } from '../src/client/AutomationView.js'
+import { buildTaskCalendar, calendarDateKey, calendarCounts, calendarTaskKind, calendarTaskStatus, taskForRun } from '../src/client/task-calendar.js'
+import { zh } from '../src/client/locales.js'
+import type { AutomationRunViewModel, AutomationViewModel } from '../src/client/protocol.js'
+
+const at = (day: number, hour = 9) => new Date(2026, 8, day, hour).toISOString()
+function task(changes: Partial<AutomationViewModel> = {}): AutomationViewModel {
+  return { id: 'a', revision: 1, name: 'Calendar task', prompt: 'Read only', status: 'active',
+    schedule: { kind: 'once', at: at(5) }, scheduleSummary: 'Once', timeZone: 'UTC',
+    provider: null, model: null, reasoningEffort: null, permission: 'read-only',
+    createdAt: at(1), updatedAt: at(1), ...changes }
+}
+function run(changes: Partial<AutomationRunViewModel> = {}): AutomationRunViewModel {
+  return { id: 'r', automationId: 'a', automationName: 'Calendar task', status: 'failed',
+    trigger: 'schedule', scheduledFor: at(5), startedAt: at(5), finishedAt: at(5, 10),
+    sessionId: 'session-a', sessionArchived: false, unread: true, ...changes }
+}
+const dayTasks = (calendar: ReturnType<typeof buildTaskCalendar>, day: number) =>
+  calendar.days.get(calendarDateKey(at(day))!) ?? []
+
+test('failed one-shots remain on their scheduled date with a visible attention count', () => {
+  for (const status of ['failed', 'interrupted', 'skipped', 'cancelled'] as const) {
+    const source = task({ lastRunAt: at(5, 10), lastRunStatus: status })
+    const history = run({ status, unread: false })
+    const calendar = buildTaskCalendar([source], [history])
+    assert.equal(dayTasks(calendar, 5).length, 1)
+    assert.equal(calendarCounts(dayTasks(calendar, 5)).attention, 1)
+    assert.equal(calendarTaskStatus(dayTasks(calendar, 5)[0]!), status)
+    assert.equal(calendarCounts(calendar.all).attention, 1)
+  }
+})
+
+test('late catch-up and midnight completion stay on the planned local date', () => {
+  const source = task({ lastRunAt: at(7), lastRunStatus: 'failed' })
+  const calendar = buildTaskCalendar([source], [run({ startedAt: at(6, 23), finishedAt: at(7) })])
+  assert.equal(dayTasks(calendar, 5).length, 1)
+  assert.equal(dayTasks(calendar, 6).length, 0)
+  assert.equal(dayTasks(calendar, 7).length, 0)
+})
+
+test('recurring tasks retain past results without mislabelling the next occurrence', () => {
+  const source = task({ schedule: { kind: 'daily', time: '09:00' }, nextRunAt: at(6),
+    lastRunAt: at(5, 10), lastRunStatus: 'failed' })
+  const calendar = buildTaskCalendar([source], [run()])
+  assert.equal(calendarTaskKind(dayTasks(calendar, 5)[0]!), 'attention')
+  assert.equal(calendarTaskKind(dayTasks(calendar, 6)[0]!), 'active')
+  assert.equal(calendarTaskStatus(dayTasks(calendar, 6)[0]!), undefined)
+  assert.equal(dayTasks(calendar, 5)[0]?.nextRunAt, at(6))
+})
+
+test('same-day retries count once and show the newest run regardless of input order', () => {
+  const source = task({ lastRunStatus: 'succeeded', lastRunAt: at(5, 12) })
+  const success = run({ id: 'retry', status: 'succeeded', trigger: 'manual', scheduledFor: at(5, 11), startedAt: at(5, 11), finishedAt: at(5, 12) })
+  for (const rows of [[run(), success], [success, run()]]) {
+    const calendar = buildTaskCalendar([source], rows)
+    assert.equal(dayTasks(calendar, 5).length, 1)
+    assert.equal(dayTasks(calendar, 5)[0]?.calendarRun?.id, 'retry')
+    assert.equal(calendarCounts(dayTasks(calendar, 5)).executed, 1)
+    assert.equal(calendarCounts(dayTasks(calendar, 5)).attention, 0)
+  }
+})
+
+test('running one-shots remain visible and a future same-day occurrence stays pending after success', () => {
+  const running = buildTaskCalendar([task({ lastRunStatus: 'running' })], [run({ status: 'running' })])
+  assert.equal(calendarCounts(dayTasks(running, 5)).running, 1)
+  const source = task({ schedule: { kind: 'interval', everyMinutes: 60 }, nextRunAt: at(5, 11), lastRunStatus: 'succeeded', lastRunAt: at(5, 10) })
+  const calendar = buildTaskCalendar([source], [run({ status: 'succeeded' })])
+  assert.equal(dayTasks(calendar, 5).length, 1)
+  assert.equal(calendarCounts(dayTasks(calendar, 5)).active, 1)
+})
+
+test('older or truncated snapshots recover the latest result without reviving deleted definitions', () => {
+  const source = task({ lastRunStatus: 'failed', lastRunAt: at(7) })
+  assert.equal(calendarCounts(dayTasks(buildTaskCalendar([source], []), 5)).attention, 1)
+  assert.equal(buildTaskCalendar([], [run()]).days.size, 0)
+  const succeeded = task({ lastRunStatus: 'succeeded', lastRunAt: at(5, 12) })
+  const calendar = buildTaskCalendar([succeeded], [run()])
+  assert.equal(calendarTaskKind(calendar.all[0]!), 'executed')
+  assert.equal(calendarTaskKind(dayTasks(calendar, 5)[0]!), 'executed')
+})
+
+test('calendar indexing preserves source data and does not duplicate successful one-shots on finish day', () => {
+  const source = task({ lastRunStatus: 'succeeded', lastRunAt: at(6) })
+  const history = run({ status: 'succeeded', finishedAt: at(6) })
+  const before = JSON.stringify([source, history])
+  const calendar = buildTaskCalendar([source], [history])
+  assert.equal(dayTasks(calendar, 5).length, 1)
+  assert.equal(dayTasks(calendar, 6).length, 0)
+  assert.equal(JSON.stringify([source, history]), before)
+})
+
+test('task cards show unverified results and a conversation link without changing persisted failure', () => {
+  const history = run({ error: 'events is not iterable' })
+  const calendar = buildTaskCalendar([task({ lastRunStatus: 'failed', lastRunAt: at(5, 10) })], [history])
+  const noop = () => {}
+  const render = (archived: boolean) => renderToStaticMarkup(createElement(AutomationCard, {
+    automation: { ...dayTasks(calendar, 5)[0]!, calendarRun: { ...history, sessionArchived: archived } },
+    now: new Date(at(7)), t: (key, params) => Object.entries(params ?? {}).reduce((value, [name, replacement]) => value.replaceAll('{'+name+'}', String(replacement)), zh[key]),
+    busyKey: undefined, confirmingDelete: false, onConfirmDelete: noop, onEdit: noop, onMutate: noop, onRun: noop, onOpen: noop,
+  }))
+  assert.match(render(false), /结果待核实/)
+  assert.match(render(false), /先打开会话核实/)
+  assert.match(render(false), /<button[^>]*class="dsh-automation-session-id"/)
+  assert.doesNotMatch(render(true), /<button[^>]*class="dsh-automation-session-id"/)
+  assert.equal(history.status, 'failed')
+})
+
+test('retrying a failed recurring task defaults to a plain run and keeps the future schedule', () => {
+  const source = task({ schedule: { kind: 'daily', time: '09:00' }, nextRunAt: at(6), lastRunStatus: 'failed', lastRunAt: at(5, 10) })
+  const calendar = buildTaskCalendar([source], [run()])
+  const html = renderToStaticMarkup(createElement(AutomationRunDialog, {
+    automation: dayTasks(calendar, 5)[0]!, busy: false, t: key => zh[key],
+    onCancel: () => {}, onRun: async () => {},
+  }))
+  assert.match(html, /<input[^>]*checked=""[^>]*value="plain"/)
+  assert.doesNotMatch(html, /<input[^>]*checked=""[^>]*value="ahead"/)
+  assert.equal(source.nextRunAt, at(6))
+})
+
+test('the actual task view counts and renders a failed task instead of an empty day', () => {
+  const never = async (): Promise<never> => { throw new Error('Unexpected write during render') }
+  const html = renderToStaticMarkup(createElement(AutomationView, {
+    sessionId: 'source', t: (key, params) => Object.entries(params ?? {}).reduce((value, [name, replacement]) => value.replaceAll('{'+name+'}', String(replacement)), zh[key]),
+    useAutomationState: selector => selector({ phase: 'ready', snapshot: {
+      scope: { cwd: '/test' }, serverNow: at(5, 12),
+      automations: [task({ lastRunStatus: 'failed', lastRunAt: at(5, 10) })],
+      runs: [run({ error: 'events is not iterable' })],
+    } }),
+    refresh: never, createAutomation: never, updateAutomation: never, mutateAutomation: never, runNow: never,
+    markRunRead: never, archiveRun: never, deleteRun: never, updateSettings: never,
+    loadModelCatalog: never, openSession: never, refreshSessions: never,
+  }))
+  const taskColumn = html.split('<aside')[0]!
+  assert.match(taskColumn, /今日任务<\/span><b>1<\/b>/)
+  assert.doesNotMatch(taskColumn, /需关注<\/b><em>|运行中<\/b><em>/)
+  assert.match(taskColumn, /结果待核实/)
+  assert.match(taskColumn, /dsh-automation-card-list/)
+  assert.doesNotMatch(taskColumn, /今天没有待执行的任务/)
+})
+
+
+test('previously ignored failures remain actionable and counted', () => {
+  const ignored = run({ needsAttention: false, unread: false, reviewedAt: at(6) })
+  const calendar = buildTaskCalendar([task()], [ignored])
+  assert.equal(dayTasks(calendar, 5).length, 1)
+  assert.equal(calendarCounts(dayTasks(calendar, 5)).attention, 1)
+  assert.equal(calendarCounts(dayTasks(calendar, 5)).executed, 0)
+  assert.equal(calendarTaskStatus(dayTasks(calendar, 5)[0]!), 'failed')
+})
+
+test('cross-day linked retries resolve the original calendar day without duplicating tasks', () => {
+  for (const status of ['succeeded', 'failed', 'running'] as const) {
+    const retry = run({ id: 'retry', status, scheduledFor: at(7), startedAt: at(7), finishedAt: at(7, 10), retryOfRunId: 'r', retryScheduledFor: at(5) })
+    const calendar = buildTaskCalendar([task({ lastRunStatus: status, lastRunAt: at(7, 10) })], [run(), retry])
+    assert.equal(dayTasks(calendar, 5).length, 1)
+    assert.equal(dayTasks(calendar, 7).length, 0)
+    assert.equal(calendarTaskStatus(dayTasks(calendar, 5)[0]!), status)
+    assert.equal(calendarCounts(dayTasks(calendar, 5))[status === 'succeeded' ? 'executed' : status === 'failed' ? 'attention' : 'running'], 1)
+  }
+})
+
+
+test('task and history cards share resolution actions and retain audit after confirmation', () => {
+  const noop = () => {}
+  const t = (key: keyof typeof zh) => zh[key]
+  const history = run({ error: 'events is not iterable', needsAttention: true })
+  const renderHistory = (row: AutomationRunViewModel, deleted = false) => renderToStaticMarkup(createElement(RecentRun, {
+    run: row, now: new Date(at(7)), t, busy: false, automationMissing: deleted, confirmingDelete: false,
+    onOpen: noop, onMarkRead: noop, onReadd: noop, onConfirmDelete: noop, onDelete: noop, onResolve: noop, onAgain: noop,
+  }))
+  const card = renderToStaticMarkup(createElement(AutomationCard, {
+    automation: { ...task(), calendarRun: history }, now: new Date(at(7)), t, busyKey: undefined,
+    confirmingDelete: false, onConfirmDelete: noop, onEdit: noop, onMutate: noop, onRun: noop, onOpen: noop,
+    onResolve: noop,
+  }))
+  for (const html of [card, renderHistory(history)]) {
+    assert.match(html, />确认无误<|>重试</)
+    assert.doesNotMatch(html, />忽略提醒</)
+    assert.doesNotMatch(html, />再次执行</)
+  }
+  assert.doesNotMatch(renderHistory(history, true), />重试</)
+  const ignored = renderHistory({ ...history, unread: false, needsAttention: false })
+  assert.doesNotMatch(ignored, /已忽略提醒，原状态保留/)
+  assert.doesNotMatch(ignored, />忽略提醒</)
+  assert.match(ignored, />确认无误</)
+  const confirmed = renderHistory({ ...history, status: 'succeeded', needsAttention: false,
+    resolution: { kind: 'confirmed', at: at(7), previousStatus: 'failed', previousError: { code: 'fixture', message: 'events is not iterable' } } })
+  assert.match(confirmed, />再次执行</)
+  assert.match(confirmed, /已人工确认无误/)
+  assert.match(confirmed, /events is not iterable/)
+  assert.doesNotMatch(confirmed, />确认无误<|>重试<|>忽略提醒</)
+})
+
+
+test('history navigation selects the exact problem and follows its resolved state', () => {
+  const original = run({ needsAttention: false, unread: false })
+  const newer = run({ id: 'newer', status: 'succeeded', startedAt: at(5, 12) })
+  const selected = taskForRun([task()], [original, newer], original.id)!
+  assert.equal(selected.calendarRun?.id, original.id)
+  assert.equal(calendarTaskKind(selected), 'attention')
+  const fixed = taskForRun([task()], [{ ...original, status: 'succeeded' }, newer], original.id)!
+  assert.equal(calendarTaskKind(fixed), 'executed')
+  assert.equal(taskForRun([], [original], original.id), undefined)
+  assert.equal(taskForRun([task()], [original], 'missing'), undefined)
+})
+
+test('history offers navigation for problems and normal actions after resolution', () => {
+  const noop = () => {}
+  const render = (status: 'failed' | 'succeeded', deleted = false) => renderToStaticMarkup(createElement(RecentRun, {
+    run: run({ status }), now: new Date(at(7)), t: key => zh[key], busy: false, automationMissing: deleted,
+    confirmingDelete: false, onOpen: noop, onMarkRead: noop, onReadd: noop, onConfirmDelete: noop,
+    onDelete: noop, onResolve: noop, onAgain: noop, onViewProblem: noop,
+  }))
+  assert.match(render('failed'), />查看异常状态</)
+  assert.doesNotMatch(render('failed'), />确认无误<|>重试<|>再次执行<|>忽略提醒</)
+  assert.match(render('succeeded'), />再次执行</)
+  assert.doesNotMatch(render('succeeded'), />查看异常状态<|>确认无误<|>重试</)
+  assert.match(render('failed', true), />确认无误</)
+  assert.doesNotMatch(render('failed', true), />查看异常状态</)
+})

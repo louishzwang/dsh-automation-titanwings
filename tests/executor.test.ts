@@ -21,7 +21,7 @@ class TrackingAbortSignal {
   }
 }
 
-function executorFixture(options: { readonly hangUntilCancelled?: boolean } = {}) {
+function executorFixture(options: { readonly hangUntilCancelled?: boolean; readonly snapshotOnly?: boolean } = {}) {
   const definition = createDefinition({
     id: 'automation-executor',
     name: 'Executor test',
@@ -47,7 +47,11 @@ function executorFixture(options: { readonly hangUntilCancelled?: boolean } = {}
     },
   }
   const agent = {
-    session,
+    session: options.snapshotOnly ? {
+      get seq() { return session.seq },
+      append: session.append,
+      snapshotEvents(fromSeq = 0) { return Object.freeze(session.events.filter(event => event.seq >= fromSeq)) },
+    } : session,
     whenIdle: () => {
       if (!followedUp || !options.hangUntilCancelled || cancelled) return Promise.resolve()
       return hangingIdle
@@ -185,4 +189,21 @@ test('executor timeout cancels a stuck Agent, settles, and removes its abort lis
   assert.equal(signal.added, 1)
   assert.equal(signal.removed, 1)
   assert.equal(signal.listeners.size, 0)
+})
+
+test('executor reads completed turns on snapshot-only DSH Sessions', async () => {
+  const fixture = executorFixture({ snapshotOnly: true })
+  const completion = await executeAutomationRun(fixture.ctx as never, fixture.definition, fixture.run, {
+    runTimeoutMs: 1_000, sessionId: 'dsh-automation-session-snapshot',
+  })
+  assert.equal(completion.status, 'succeeded')
+  assert.equal(completion.summary, 'done')
+})
+
+test('snapshot-only Sessions retain timeout classification', async () => {
+  const fixture = executorFixture({ snapshotOnly: true, hangUntilCancelled: true })
+  const completion = await executeAutomationRun(fixture.ctx as never, fixture.definition, fixture.run, {
+    runTimeoutMs: 5, sessionId: 'dsh-automation-session-snapshot-timeout',
+  })
+  assert.equal(completion.error?.code, 'timeout')
 })

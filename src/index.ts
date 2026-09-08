@@ -6,11 +6,12 @@ import z from '@deepseek-ai/schemastery'
 import { registerAutomationRpc } from './rpc.ts'
 import { AutomationService } from './service.ts'
 import { registerAutomationTools } from './tools.ts'
+import { readSessionEvents } from './session-events.ts'
 
 export const name = 'dsh-automation'
 export const inject = [
   'storageDomain', 'agents', 'sessions', 'workspaceRegistry', 'agentDefaultModel',
-  'agentPresets', 'tools', 'connection',
+  'agentPresets', 'tools', 'connection', 'settings',
 ]
 
 export interface Config {
@@ -19,14 +20,20 @@ export interface Config {
   readonly misfireGraceMinutes?: number
   readonly historyLimit?: number
   readonly archiveRunSessions?: boolean
+  /** Replay every missed occurrence after a host resume instead of skipping stale ones. */
+  readonly catchUpMissedRuns?: boolean
+  /** Backlog cap per automation when catchUpMissedRuns is enabled (most recent occurrences win). */
+  readonly catchUpMissedRunsMax?: number
 }
 
 export const Config = z.object({
   maxConcurrentRuns: z.number().step(1).min(1).max(32).default(2),
   runTimeoutMinutes: z.number().step(1).min(1).max(1_440).default(60),
-  misfireGraceMinutes: z.number().step(1).min(0).max(10_080).default(15),
+  misfireGraceMinutes: z.number().step(1).min(0).max(525_600).default(15),
   historyLimit: z.number().step(1).min(1).max(5_000).default(200),
   archiveRunSessions: z.boolean().default(false),
+  catchUpMissedRuns: z.boolean().default(false),
+  catchUpMissedRunsMax: z.number().step(1).min(1).max(1_000).default(1),
 })
 
 const MUTATING_TOOLS = new Set([
@@ -62,7 +69,38 @@ export async function apply(ctx: Context, rawConfig: Config): Promise<void> {
       misfireGraceMs: config.misfireGraceMinutes * 60_000,
       historyLimit: config.historyLimit,
       archiveRunSessions: config.archiveRunSessions,
+      catchUpMissedRuns: config.catchUpMissedRuns,
+      catchUpMissedRunsMax: config.catchUpMissedRunsMax,
     })
+    // Host-wide policy lives in the `dsh-automation` settings namespace so the
+    // run-history panel can edit it at runtime; the cordis config acts as the
+    // composition base until the user first saves from the UI.
+    const settingsService = (ctx as unknown as {
+      readonly settings?: {
+        register(
+          ns: string,
+          schema: unknown,
+          options?: { readonly base?: Record<string, unknown> },
+        ): { readonly get: () => unknown; readonly update: (value: unknown) => Promise<unknown> }
+      }
+    }).settings
+    if (settingsService !== undefined) {
+      const settingsOwner = settingsService.register('dsh-automation', z.object({
+        catchUpMissedRuns: z.boolean().default(false),
+        catchUpMissedRunsMax: z.number().step(1).min(1).max(1_000).default(1),
+        misfireGraceMinutes: z.number().step(1).min(0).max(525_600).default(60),
+      }), {
+        base: {
+          catchUpMissedRuns: config.catchUpMissedRuns,
+          catchUpMissedRunsMax: config.catchUpMissedRunsMax,
+          misfireGraceMinutes: config.misfireGraceMinutes,
+        },
+      })
+      service.attachSettings({
+        get: () => settingsOwner.get() as never,
+        update: async (next) => { await settingsOwner.update(next) },
+      })
+    }
     const agentTools = new Map<string, () => void | Promise<void>>()
     let cleaned = false
     let stopCreated = () => {}
@@ -95,8 +133,14 @@ export async function apply(ctx: Context, rawConfig: Config): Promise<void> {
     try {
       const mountTools = (agent: any): void => {
         if (!alive || agentTools.has(String(agent.id))
-          || service.ownsSession(String(agent.id), agent.session.events)) return
+          || service.ownsSession(String(agent.id))) return
         if (!ctx.agents.roots().includes(agent)) return
+        try {
+          if (service.ownsSession(String(agent.id), readSessionEvents(agent.session))) return
+        } catch (error: unknown) {
+          ctx.logger.warn(`dsh-automation: cannot verify Session provenance; management tools withheld: ${String(error)}`)
+          return
+        }
         const dispose = agent.ctx.effect(
           () => registerAutomationTools(service, agent),
           'dsh-automation: management tools',

@@ -88,11 +88,28 @@ export interface AutomationRunViewModel {
   readonly summary?: string
   readonly error?: string
   readonly unread?: boolean
+  readonly needsAttention?: boolean
+  readonly reviewedAt?: string
+  readonly retryOfRunId?: string
+  readonly retryScheduledFor?: string
+  readonly resolution?: {
+    readonly kind: 'confirmed' | 'retry'
+    readonly at: string
+    readonly previousStatus: AutomationRunStatus
+    readonly previousError: { readonly code: string; readonly message: string } | null
+    readonly retryRunId?: string
+  }
   readonly promptSnapshot?: string
   readonly provider?: string | null
   readonly model?: string | null
   readonly reasoningEffort?: string | null
   readonly permission?: AutomationPermission
+}
+
+export interface AutomationSettingsView {
+  readonly catchUpMissedRuns: boolean
+  readonly catchUpMissedRunsMax: number
+  readonly misfireGraceMinutes: number
 }
 
 export interface AutomationSnapshot {
@@ -103,6 +120,9 @@ export interface AutomationSnapshot {
   }
   readonly automations: readonly AutomationViewModel[]
   readonly runs: readonly AutomationRunViewModel[]
+  readonly settings?: AutomationSettingsView
+  readonly attentionCount?: number
+  readonly runResolutionSupported?: boolean
   readonly serverNow: string
 }
 
@@ -150,9 +170,12 @@ export interface MutateRequest {
   readonly mutation: 'pause' | 'resume' | 'delete'
 }
 
+export type RunNowMode = 'plain' | 'ahead'
+
 export interface RunNowRequest {
   readonly sessionId: string
   readonly automationId: string
+  readonly mode?: RunNowMode
 }
 
 export interface MarkReadRequest {
@@ -168,6 +191,17 @@ export interface ArchiveRunRequest {
 export interface DeleteRunRequest {
   readonly sessionId: string
   readonly runId: string
+}
+
+export interface SettingsUpdateInput {
+  readonly catchUpMissedRuns: boolean
+  readonly catchUpMissedRunsMax: number
+  readonly misfireGraceMinutes: number
+}
+
+export interface UpdateSettingsRequest {
+  readonly sessionId: string
+  readonly settings: SettingsUpdateInput
 }
 
 export interface RpcErrorValue {

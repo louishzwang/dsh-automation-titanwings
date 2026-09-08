@@ -312,3 +312,8 @@ pnpm check
 ## 📄 许可
 
 [MIT](LICENSE)。这是 DeepSeek Harness 的独立社区插件；文中提到“Codex”仅用于说明影响本项目设计的产品模式。
+
+
+### Fork 维护记录
+
+本轮可靠性与性能优化、数据兼容说明、验证结果和生效步骤见[优化交接记录](docs/OPTIMIZATION.zh-CN.md)。

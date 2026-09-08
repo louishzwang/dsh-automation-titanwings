@@ -70,6 +70,9 @@ export interface AutomationDefinition {
   readonly createdBy: AutomationCreator
   readonly createdAt: string
   readonly updatedAt: string
+  /** Execution receipts survive history deletion; absent in legacy definitions. */
+  readonly scheduleHandledThrough?: string | undefined
+  readonly retiredReplacements?: readonly string[] | undefined
 }
 
 export interface AutomationTargetSnapshot {
@@ -106,6 +109,17 @@ export interface AutomationRun {
   readonly unread: boolean
   /** Set when the user marked a problem run as reviewed; absent before that. */
   readonly reviewedAt?: string | null | undefined
+  readonly retryOfRunId?: string | undefined
+  readonly retryScheduledFor?: string | undefined
+  readonly resolution?: {
+    readonly kind: 'confirmed' | 'retry'
+    readonly at: string
+    readonly previousStatus: 'failed' | 'skipped' | 'cancelled'
+    readonly previousError: { readonly code: string; readonly message: string } | null
+    readonly retryRunId?: string | undefined
+  } | undefined
+  /** Scheduled occurrence this manual "run ahead" run replaces once it succeeds. */
+  readonly replacesScheduledFor?: string | null | undefined
 }
 
 export interface CreateAutomationInput {

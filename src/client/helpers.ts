@@ -3,6 +3,7 @@ import type { AutomationLocaleKey } from './locales.js'
 import type {
   AutomationSchedule,
   AutomationRunStatus,
+  AutomationRunViewModel,
   AutomationSnapshot,
   AutomationViewModel,
   CreateAutomationInput,
@@ -37,15 +38,26 @@ export function readDraft(storage: SortPreferenceStorage | undefined, key: strin
   }
 }
 
-export function writeDraft(storage: SortPreferenceStorage | undefined, key: string, form: AutomationFormState): void {
-  storage?.setItem(key, JSON.stringify(form))
+export function writeDraft(storage: SortPreferenceStorage | undefined, key: string, form: AutomationFormState): boolean {
+  if (storage === undefined) return false
+  try {
+    storage.setItem(key, JSON.stringify(form))
+    return true
+  } catch {
+    // Draft persistence is best-effort; storage denial must not unmount the form.
+    return false
+  }
 }
 
 export function clearDraft(storage: SortPreferenceStorage | undefined, key: string): void {
   if (storage === undefined) return
-  const removable = storage as SortPreferenceStorage & { readonly removeItem?: (key: string) => void }
-  if (removable.removeItem !== undefined) removable.removeItem(key)
-  else storage.setItem(key, '')
+  try {
+    const removable = storage as SortPreferenceStorage & { readonly removeItem?: (key: string) => void }
+    if (removable.removeItem !== undefined) removable.removeItem(key)
+    else storage.setItem(key, '')
+  } catch {
+    // Keep form close/submit paths usable when browser storage is unavailable.
+  }
 }
 
 export interface AutomationFormState {
@@ -107,6 +119,15 @@ function exactLocalDateTimeValue(iso: string): string {
   const date = new Date(iso)
   const offset = date.getTimezoneOffset() * 60_000
   return new Date(date.getTime() - offset).toISOString().slice(0, 16)
+}
+
+/** Refresh stale create-only dates while retaining the user's future choice and draft. */
+export function freshCreateForm(initial: AutomationFormState | undefined, now = new Date()): AutomationFormState {
+  const form = initial ?? defaultFormState(now)
+  const at = new Date(form.onceAt).getTime()
+  return Number.isFinite(at) && at > now.getTime()
+    ? form
+    : { ...form, onceAt: localDateTimeValue(now) }
 }
 
 /** Build an editable draft from the complete durable definition, not its card preview. */
@@ -305,6 +326,10 @@ export function reasoningEffortChoices(
 }
 
 /** Problem statuses that count as needs-action until the user marks them reviewed. */
+export function runNeedsAttention(run: AutomationRunViewModel): boolean {
+  return ATTENTION_STATUSES.has(run.status)
+}
+
 const ATTENTION_STATUSES = new Set<AutomationRunStatus>(['failed', 'interrupted', 'skipped', 'cancelled'])
 
 export interface OverviewStats {
@@ -425,9 +450,31 @@ export function deriveOverview(snapshot: AutomationSnapshot): OverviewStats {
   return {
     total: snapshot.automations.length,
     active: snapshot.automations.filter(item => item.status === 'active').length,
-    attention: snapshot.runs.filter(run => ATTENTION_STATUSES.has(run.status) && run.unread !== false).length,
+    attention: snapshot.attentionCount ?? snapshot.runs.filter(runNeedsAttention).length,
     ...(next === undefined ? {} : { nextRunAt: next }),
   }
+}
+
+/** 已完成的一次性任务：仍启用、最近一次成功执行、且没有待执行的后续计划。 */
+export function isFulfilledAutomation(automation: AutomationViewModel): boolean {
+  return automation.status === 'active'
+    && automation.nextRunAt === undefined
+    && automation.lastRunStatus === 'succeeded'
+}
+
+/** 统计某个本地日期当天完成（lastRunAt 落在此日）的已执行任务数。 */
+export function countExecutedOnDay(
+  automations: readonly AutomationViewModel[],
+  day: Date,
+): number {
+  let count = 0
+  for (const automation of automations) {
+    if (!isFulfilledAutomation(automation)) continue
+    if (automation.lastRunAt !== undefined && isSameLocalDay(new Date(automation.lastRunAt), day)) {
+      count += 1
+    }
+  }
+  return count
 }
 
 export function formatRelativeTime(iso: string, now: Date, t: Translate): string {
@@ -508,6 +555,17 @@ export interface SortPreferenceStorage {
   setItem(key: string, value: string): void
 }
 
+export function resolveSortPreferenceStorage(
+  owner: { readonly localStorage: SortPreferenceStorage } | undefined,
+): SortPreferenceStorage | undefined {
+  if (owner === undefined) return undefined
+  try {
+    return owner.localStorage
+  } catch {
+    return undefined
+  }
+}
+
 export const WORKSPACE_SORT_DEFAULT_KEY = 'dsh-automation.sort-default.workspace'
 
 /** 读取已保存的默认排序；缺失、损坏或无存储时返回 undefined，由调用方用自身默认值。 */
@@ -534,5 +592,18 @@ export function writeSortDefault(
   key: AutomationSortKey,
   direction: AutomationSortDirection,
 ): void {
-  storage.setItem(storageKey, JSON.stringify({ key, direction }))
+  try {
+    storage.setItem(storageKey, JSON.stringify({ key, direction }))
+  } catch {
+    // Preference persistence is best-effort; storage denial must not break sorting.
+  }
+}
+
+
+/** Preference reads also tolerate browsers that expose storage but deny getItem. */
+export function readRangeDefault(storage: SortPreferenceStorage | undefined, key: string): 'week' | 'month' | 'list' {
+  try {
+    const value = storage?.getItem(key)
+    return value === 'month' || value === 'list' ? value : 'week'
+  } catch { return 'week' }
 }

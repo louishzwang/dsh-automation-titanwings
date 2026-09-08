@@ -79,3 +79,25 @@ test('weekly selection and one-shot next occurrence are bounded correctly', () =
     '2026-08-13T00:00:00Z',
   ), '2026-08-13T01:00:00.000Z')
 })
+
+
+test('bounded reverse enumeration matches full forward history across zones and DST', async () => {
+  const { recentOccurrencesBetween } = await import('../src/recurrence.ts')
+  const schedules = [
+    { kind: 'daily' as const, time: '02:30', timeZone: 'America/New_York' },
+    { kind: 'weekly' as const, time: '09:00', weekdays: ['MO', 'SU'] as const, timeZone: 'Europe/Berlin' },
+    { kind: 'interval' as const, everyMinutes: 120, anchor: '2026-03-01T00:00:00Z', timeZone: 'UTC' },
+    { kind: 'once' as const, at: '2026-03-08T09:00:00Z', timeZone: 'Asia/Shanghai' },
+  ]
+  for (const schedule of schedules) {
+    for (const [after, until] of [
+      ['2026-03-01T00:00:00Z', '2026-03-15T09:00:00Z'],
+      ['2026-10-20T00:00:00Z', '2026-11-05T12:00:00Z'],
+    ] as const) {
+      for (const cap of [1, 3, 30]) {
+        assert.deepEqual(recentOccurrencesBetween(schedule, after, until, cap),
+          occurrencesBetween(schedule, after, until, 1000).slice(-cap))
+      }
+    }
+  }
+})

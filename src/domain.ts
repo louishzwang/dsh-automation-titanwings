@@ -77,6 +77,8 @@ export const automationDefinitionSchema: z.ZodType<AutomationDefinition> = z.obj
   createdBy: creator,
   createdAt: instant,
   updatedAt: instant,
+  scheduleHandledThrough: instant.optional(),
+  retiredReplacements: z.array(instant).optional(),
 }).superRefine((value, ctx) => {
   try {
     if (value.timeZone !== value.schedule.timeZone) {
@@ -109,6 +111,15 @@ export const automationRunSchema: z.ZodType<AutomationRun> = z.object({
   error: z.object({ code: nonBlank, message: nonBlank }).nullable(),
   unread: z.boolean(),
   reviewedAt: instant.nullable().optional(),
+  retryOfRunId: nonBlank.optional(),
+  retryScheduledFor: instant.optional(),
+  resolution: z.object({
+    kind: z.enum(['confirmed', 'retry']), at: instant,
+    previousStatus: z.enum(['failed', 'skipped', 'cancelled']),
+    previousError: z.object({ code: nonBlank, message: nonBlank }).nullable(),
+    retryRunId: nonBlank.optional(),
+  }).optional(),
+  replacesScheduledFor: instant.nullable().optional(),
 })
 
 // `defineDomain()` and `domainTable()` are identity helpers in DSH. Keeping the
@@ -221,11 +232,12 @@ export function createManualRun(
   definition: AutomationDefinition,
   scheduledFor: string,
   nonce: string = randomUUID(),
+  replacesScheduledFor?: string | null,
 ): AutomationRun {
   automationDefinitionSchema.parse(definition)
   const normalizedInstant = parseInstant(scheduledFor, 'scheduledFor')
   const key = `manual:${definition.id}:${requireNonBlank(nonce, 'nonce')}`
-  return queuedRun(definition, normalizedInstant, 'manual', key, runIdForOccurrence(key))
+  return queuedRun(definition, normalizedInstant, 'manual', key, runIdForOccurrence(key), replacesScheduledFor)
 }
 
 function setStatus(
@@ -249,6 +261,7 @@ function queuedRun(
   trigger: AutomationRun['trigger'],
   key: string,
   id: string,
+  replacesScheduledFor?: string | null,
 ): AutomationRun {
   return automationRunSchema.parse({
     version: 1,
@@ -275,6 +288,7 @@ function queuedRun(
     summary: null,
     error: null,
     unread: true,
+    replacesScheduledFor: replacesScheduledFor ?? null,
   })
 }
 

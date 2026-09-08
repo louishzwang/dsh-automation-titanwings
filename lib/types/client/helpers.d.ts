@@ -1,5 +1,5 @@
 import type { Translate } from './contracts.js';
-import type { AutomationSchedule, AutomationSnapshot, AutomationViewModel, CreateAutomationInput, ModelCatalog, ModelReasoningEffort, UpdateAutomationInput } from './protocol.js';
+import type { AutomationSchedule, AutomationRunViewModel, AutomationSnapshot, AutomationViewModel, CreateAutomationInput, ModelCatalog, ModelReasoningEffort, UpdateAutomationInput } from './protocol.js';
 export type ScheduleKind = 'once' | 'interval' | 'daily' | 'weekly';
 export interface DayAutomationCounts {
     readonly active: number;
@@ -7,7 +7,7 @@ export interface DayAutomationCounts {
 }
 /** 读取本地草稿；缺失、损坏或非表单结构时返回 undefined。 */
 export declare function readDraft(storage: SortPreferenceStorage | undefined, key: string): AutomationFormState | undefined;
-export declare function writeDraft(storage: SortPreferenceStorage | undefined, key: string, form: AutomationFormState): void;
+export declare function writeDraft(storage: SortPreferenceStorage | undefined, key: string, form: AutomationFormState): boolean;
 export declare function clearDraft(storage: SortPreferenceStorage | undefined, key: string): void;
 export interface AutomationFormState {
     readonly name: string;
@@ -32,6 +32,8 @@ export declare class AutomationFormError extends Error {
 export declare function localDateTimeValue(date?: Date): string;
 /** Create a fresh form state; the schedule defaults to a single future run. */
 export declare function defaultFormState(now?: Date): AutomationFormState;
+/** Refresh stale create-only dates while retaining the user's future choice and draft. */
+export declare function freshCreateForm(initial: AutomationFormState | undefined, now?: Date): AutomationFormState;
 /** Build an editable draft from the complete durable definition, not its card preview. */
 export declare function formStateFromAutomation(automation: AutomationViewModel): AutomationFormState;
 export declare function buildCreateInput(form: AutomationFormState, now?: Date): CreateAutomationInput;
@@ -52,6 +54,8 @@ export interface ReasoningEffortChoice extends ModelReasoningEffort {
 }
 /** Use exact-model opaque effort ids and retain an unavailable current pin. */
 export declare function reasoningEffortChoices(catalog: ModelCatalog, provider: string | null, model: string | null, currentEffort: string | null): readonly ReasoningEffortChoice[];
+/** Problem statuses that count as needs-action until the user marks them reviewed. */
+export declare function runNeedsAttention(run: AutomationRunViewModel): boolean;
 export interface OverviewStats {
     readonly total: number;
     readonly active: number;
@@ -75,6 +79,10 @@ export declare function buildWeekCalendarDays(cursor: Date): readonly Date[];
 /** 生成月视图的 6x7 日期网格，覆盖该月所在的所有周。 */
 export declare function buildMonthCalendarGrid(cursor: Date): readonly Date[];
 export declare function deriveOverview(snapshot: AutomationSnapshot): OverviewStats;
+/** 已完成的一次性任务：仍启用、最近一次成功执行、且没有待执行的后续计划。 */
+export declare function isFulfilledAutomation(automation: AutomationViewModel): boolean;
+/** 统计某个本地日期当天完成（lastRunAt 落在此日）的已执行任务数。 */
+export declare function countExecutedOnDay(automations: readonly AutomationViewModel[], day: Date): number;
 export declare function formatRelativeTime(iso: string, now: Date, t: Translate): string;
 export declare function shortSessionId(sessionId: string): string;
 export declare function formatSchedule(schedule: AutomationSchedule, t: Translate): string;
@@ -86,6 +94,9 @@ export interface SortPreferenceStorage {
     getItem(key: string): string | null;
     setItem(key: string, value: string): void;
 }
+export declare function resolveSortPreferenceStorage(owner: {
+    readonly localStorage: SortPreferenceStorage;
+} | undefined): SortPreferenceStorage | undefined;
 export declare const WORKSPACE_SORT_DEFAULT_KEY = "dsh-automation.sort-default.workspace";
 /** 读取已保存的默认排序；缺失、损坏或无存储时返回 undefined，由调用方用自身默认值。 */
 export declare function readSortDefault(storage: SortPreferenceStorage | undefined, storageKey: string): {
@@ -93,3 +104,5 @@ export declare function readSortDefault(storage: SortPreferenceStorage | undefin
     readonly direction: AutomationSortDirection;
 } | undefined;
 export declare function writeSortDefault(storage: SortPreferenceStorage, storageKey: string, key: AutomationSortKey, direction: AutomationSortDirection): void;
+/** Preference reads also tolerate browsers that expose storage but deny getItem. */
+export declare function readRangeDefault(storage: SortPreferenceStorage | undefined, key: string): 'week' | 'month' | 'list';

@@ -12,6 +12,7 @@ import {
   defaultFormState,
   deriveOverview,
   formStateFromAutomation,
+  freshCreateForm,
   formatRelativeTime,
   formatSchedule,
   isSameLocalDay,
@@ -19,6 +20,7 @@ import {
   readDraft,
   readSortDefault,
   reasoningEffortChoices,
+  resolveSortPreferenceStorage,
   sortAutomations,
   startOfLocalWeek,
   writeDraft,
@@ -26,7 +28,7 @@ import {
   WORKSPACE_SORT_DEFAULT_KEY,
 } from '../src/client/helpers.js'
 import { en, zh } from '../src/client/locales.js'
-import { RecentRun } from '../src/client/AutomationView.js'
+import { clampAutomationFloatBox, initialAutomationFloatBox, RecentRun } from '../src/client/AutomationView.js'
 import { createAutomationRuntime, loadModelCatalog } from '../src/client/runtime.js'
 import type { AutomationSnapshot, ModelCatalog } from '../src/client/protocol.js'
 
@@ -53,7 +55,7 @@ test('overview labels distinguish enabled definitions from running executions', 
   assert.equal(zh['stats.noAttention'], '一切正常')
   assert.equal(zh['stats.currentStatus'], '当前状态：')
   assert.equal(en['stats.active'], 'Active')
-  assert.equal(zh['stats.active'], '启用')
+  assert.equal(zh['stats.active'], '已启用')
   assert.notEqual(zh['stats.active'], zh['status.running'])
 })
 
@@ -243,29 +245,79 @@ test('catalog choices keep successful providers and unavailable current pins', (
   ])
 })
 
-test('Host-wide model catalog uses the official API envelope and preserves partial failures', async () => {
+test('Host-wide model catalog loads through the Session API and rejects malformed values', async () => {
   const catalog: ModelCatalog = {
     groups: [{ id: 'provider', name: 'Provider', models: [{ id: 'model', name: 'Model' }] }],
     failures: [{ id: 'broken', name: 'Broken', message: 'offline' }],
   }
-  const calls: unknown[] = []
-  const value = await loadModelCatalog({
-    models: async (payload) => {
-      calls.push(payload)
-      return { result: { ok: true, value: catalog } }
-    },
-  })
-  assert.deepEqual(calls, [{}])
-  assert.equal(value, catalog)
+  const remote = {
+    session: { modelCatalog: async () => ({ ok: true as const, value: catalog }) },
+  }
+  assert.equal(await loadModelCatalog(remote), catalog)
+  assert.equal((await remote.session.modelCatalog()).ok, true)
 
   await assert.rejects(() => loadModelCatalog({
-    models: async () => ({
-      result: { ok: false, error: { code: 'catalog-unavailable', message: 'host offline' } },
-    }),
+    session: {
+      modelCatalog: async () => ({
+        ok: false,
+        error: { code: 'catalog-unavailable', message: 'host offline' },
+      }),
+    },
   }), /host offline/)
+  await assert.rejects(() => loadModelCatalog({
+    session: {
+      modelCatalog: async () => ({
+        ok: true,
+        value: { groups: undefined, failures: [] } as unknown as ModelCatalog,
+      }),
+    },
+  }), /invalid response/)
 })
 
-test('deriveOverview counts unread problem runs and ignores reviewed ones', () => {
+test('floating editor geometry remains fully visible in narrow and resized viewports', () => {
+  assert.deepEqual(initialAutomationFloatBox(undefined, { width: 320, height: 240 }), {
+    x: 8, y: 8, w: 304, h: 224,
+  })
+  assert.deepEqual(initialAutomationFloatBox(
+    { left: 300, right: 320, top: 220, bottom: 240 },
+    { width: 320, height: 240 },
+  ), { x: 8, y: 8, w: 304, h: 224 })
+  assert.deepEqual(clampAutomationFloatBox(
+    { x: -20, y: -20, w: 100, h: 100 },
+    { width: 640, height: 480 },
+  ), { x: 8, y: 8, w: 320, h: 320 })
+  assert.deepEqual(clampAutomationFloatBox(
+    { x: 900, y: 700, w: 900, h: 900 },
+    { width: 1024, height: 768 },
+  ), { x: 116, y: 8, w: 900, h: 752 })
+})
+
+test('floating editor geometry honours the visual viewport origin', () => {
+  const viewport = { width: 800, height: 600, offsetLeft: 40, offsetTop: 60 }
+  const initial = initialAutomationFloatBox(undefined, viewport)
+  assert.equal(initial.x >= 48, true)
+  assert.equal(initial.y >= 68, true)
+  assert.equal(initial.x + initial.w <= 40 + 800 - 8, true)
+  assert.equal(initial.y + initial.h <= 60 + 600 - 8, true)
+
+  const clamped = clampAutomationFloatBox(
+    { x: -200, y: -200, w: 100, h: 100 },
+    viewport,
+  )
+  assert.equal(clamped.x >= 48, true)
+  assert.equal(clamped.y >= 68, true)
+  assert.equal(clamped.w, 320)
+  assert.equal(clamped.h, 320)
+
+  const clampedLow = clampAutomationFloatBox(
+    { x: 900, y: 900, w: 900, h: 900 },
+    viewport,
+  )
+  assert.equal(clampedLow.x + clampedLow.w <= 40 + 800 - 8, true)
+  assert.equal(clampedLow.y + clampedLow.h <= 60 + 600 - 8, true)
+})
+
+test('deriveOverview counts every unresolved problem regardless of read state', () => {
   const snapshot: AutomationSnapshot = {
     scope: { cwd: '/workspace' },
     serverNow: '2026-08-13T00:00:00.000Z',
@@ -296,7 +348,7 @@ test('deriveOverview counts unread problem runs and ignores reviewed ones', () =
   assert.deepEqual(deriveOverview(snapshot), {
     total: 2,
     active: 1,
-    attention: 2,
+    attention: 4,
     nextRunAt: '2026-08-13T09:00:00.000Z',
   })
 })
@@ -341,6 +393,13 @@ test('calendar counts split active and paused tasks on the same day', () => {
   assert.deepEqual(countAutomationsByStatusOnDay([active, paused], new Date(2026, 7, 28)), { active: 0, paused: 0 })
 })
 
+test('storage discovery tolerates browsers that deny localStorage access', () => {
+  assert.equal(resolveSortPreferenceStorage(undefined), undefined)
+  assert.equal(resolveSortPreferenceStorage({
+    get localStorage(): never { throw new Error('denied') },
+  }), undefined)
+})
+
 test('create-form drafts roundtrip through storage and reject corrupt values', () => {
   const values = new Map<string, string>()
   const storage = {
@@ -363,6 +422,17 @@ test('create-form drafts roundtrip through storage and reject corrupt values', (
 
   clearDraft(storage, key)
   assert.equal(storage.getItem(key), null)
+
+  const deniedStorage = {
+    getItem: () => { throw new Error('denied') },
+    setItem: () => { throw new Error('denied') },
+    removeItem: () => { throw new Error('denied') },
+  }
+  assert.equal(readDraft(deniedStorage, key), undefined)
+  assert.doesNotThrow(() => writeDraft(deniedStorage, key, form))
+  assert.doesNotThrow(() => clearDraft(deniedStorage, key))
+  assert.equal(readSortDefault(deniedStorage, WORKSPACE_SORT_DEFAULT_KEY), undefined)
+  assert.doesNotThrow(() => writeSortDefault(deniedStorage, WORKSPACE_SORT_DEFAULT_KEY, 'created', 'desc'))
 })
 
 test('formatRelativeTime handles past and future windows', () => {
@@ -502,7 +572,7 @@ test('run cards expose re-add and record-delete actions with a confirm step', ()
   assert.match(confirming.filter(node => node.type === 'button').map(node => String(node.props?.children)).join(' | '), /Confirm delete/)
 })
 
-test('skipped and cancelled runs offer mark-reviewed exactly while unread', () => {
+test('problem runs never offer the obsolete ignore reminder action', () => {
   type RenderedNode = {
     readonly type?: unknown
     readonly props?: { readonly className?: string; readonly children?: unknown }
@@ -526,9 +596,9 @@ test('skipped and cancelled runs offer mark-reviewed exactly while unread', () =
     onConfirmDelete: () => {}, onDelete: () => {},
   }) as unknown)
   const offersMarkReviewed = (status: 'skipped' | 'cancelled', unread: boolean): boolean => render(status, unread)
-    .some(node => node.type === 'button' && String(node.props?.children).includes('Mark reviewed'))
+    .some(node => node.type === 'button' && String(node.props?.children).includes('Ignore reminder'))
   for (const status of ['skipped', 'cancelled'] as const) {
-    assert.equal(offersMarkReviewed(status, true), true)
+    assert.equal(offersMarkReviewed(status, true), false)
     assert.equal(offersMarkReviewed(status, false), false)
   }
 })
@@ -663,4 +733,47 @@ test('sort default preferences survive storage roundtrips and reject corrupt val
   assert.equal(readSortDefault(storage, WORKSPACE_SORT_DEFAULT_KEY), undefined)
   values.set(WORKSPACE_SORT_DEFAULT_KEY, JSON.stringify({ key: 'title', direction: 'asc' }))
   assert.equal(readSortDefault(storage, WORKSPACE_SORT_DEFAULT_KEY), undefined)
+})
+
+
+test('new hosts separate opening a conversation from ignoring and refresh every resolution', async () => {
+  const calls: string[] = []
+  const snapshot = { scope: { cwd: '/test' }, automations: [], runs: [], serverNow: new Date().toISOString(), runResolutionSupported: true }
+  const runtime = createAutomationRuntime({ call: async (_channel, endpoint) => {
+    calls.push(endpoint)
+    return { ok: true, value: endpoint === 'snapshot' ? snapshot : {} }
+  } }, 'source')
+  await runtime.refresh()
+  calls.length = 0
+  await runtime.openRunSession('r', async () => {})
+  await runtime.confirmRun('r')
+  await runtime.retryRun('r')
+  await runtime.markRunRead('r')
+  assert.deepEqual(calls, ['read-run', 'snapshot', 'confirm-run', 'snapshot', 'retry-run', 'snapshot', 'mark-read', 'snapshot'])
+})
+
+
+test('create defaults and stale drafts advance to the next local whole hour', () => {
+  for (const now of [new Date(2026, 8, 7, 14), new Date(2026, 8, 7, 14, 37), new Date(2026, 8, 7, 23, 59)]) {
+    const expected = new Date(now)
+    expected.setHours(now.getHours() + 1, 0, 0, 0)
+    const oldDraft = { ...defaultFormState(new Date(2026, 8, 3)), name: 'Keep name', prompt: 'Keep input', provider: 'route', model: 'model' }
+    const before = JSON.stringify(oldDraft)
+    for (const initial of [undefined, oldDraft, { ...oldDraft, onceAt: '' }, { ...oldDraft, onceAt: 'invalid' }, { ...oldDraft, onceAt: now.toISOString() }]) {
+      const actual = freshCreateForm(initial, now)
+      assert.equal(new Date(actual.onceAt).getTime(), expected.getTime())
+      if (initial !== undefined) assert.deepEqual({ ...actual, onceAt: initial.onceAt }, initial)
+    }
+    assert.equal(JSON.stringify(oldDraft), before)
+  }
+})
+
+test('create keeps explicit future dates and refreshes again after a draft ages', () => {
+  const now = new Date(2026, 8, 7, 14)
+  const future = defaultFormState(new Date(2026, 8, 9, 10))
+  assert.equal(freshCreateForm(future, now), future)
+  const reopened = freshCreateForm(future, new Date(2026, 8, 12, 14))
+  assert.equal(new Date(reopened.onceAt).getTime(), new Date(2026, 8, 12, 15).getTime())
+  const switching = freshCreateForm({ ...future, scheduleKind: 'once' }, new Date(2026, 8, 12, 14))
+  assert.equal(switching.onceAt, reopened.onceAt)
 })

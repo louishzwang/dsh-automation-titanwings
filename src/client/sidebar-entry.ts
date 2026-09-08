@@ -5,6 +5,7 @@
  * conversation tab ring exists, otherwise surface an explicit hint. */
 import type { Translate } from './contracts.js'
 import { activateAutomationTab } from './navigation.js'
+import { coalesceFrame } from './refresh-loop.js'
 
 export const ENTRY_ATTR = 'data-dsh-automation-entry'
 const NOTICE_ID = 'dsh-automation-sidebar-unavailable'
@@ -126,12 +127,22 @@ export function installAutomationSidebarEntry(t: Translate): () => void {
     rootEl.insertBefore(entry, anchor)
   }
   placeEntry()
-  const observer = new MutationObserver(placeEntry)
+  const placement = coalesceFrame(placeEntry, {
+    request: callback => window.requestAnimationFrame(callback),
+    cancel: id => window.cancelAnimationFrame(id),
+  })
+  const observer = new MutationObserver(records => {
+    // Conversation streaming should not trigger sidebar queries.
+    if (rootEl?.isConnected && entry.isConnected
+      && !records.some(record => record.target === rootEl || rootEl!.contains(record.target))) return
+    placement.schedule()
+  })
   observer.observe(document.body, { childList: true, subtree: true })
   window.addEventListener('resize', positionNotice)
 
   return () => {
     observer.disconnect()
+    placement.dispose()
     window.removeEventListener('resize', positionNotice)
     hideTooltip()
     entry.remove()

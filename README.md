@@ -313,3 +313,8 @@ The package builds a Host ESM bundle and a Web client bundle for DSH's `window._
 ## 📄 License
 
 [MIT](LICENSE). This is an independent community plugin for DeepSeek Harness. “Codex” is referenced only to describe the product pattern that informed the design.
+
+
+### Fork maintenance notes
+
+The local reliability/performance branch and its data-compatibility, validation, and rollout notes are documented in [the optimization handoff](docs/OPTIMIZATION.zh-CN.md).
